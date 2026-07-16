@@ -117,7 +117,7 @@ module systolic_array #(
                 h_wire[0][0] = data_in[0];
             end else begin
                 if (int'(cnt) < PE_DIM) begin
-                    h_wire[cnt][0] = data_in_reg[cnt];
+                    h_wire[cnt[2:0]][0] = data_in_reg[cnt[2:0]];
                 end
             end
         end
