@@ -3,6 +3,7 @@
 
 module pe #(
     parameter int COL_ID = 0,
+    parameter int PE_DIM = 8,
     parameter int DATA_LENGTH = 8,
     parameter int OUTPUT_LENGTH = 32
 )(
@@ -29,10 +30,11 @@ module pe #(
         end
         else if (load_w) begin
             load_cnt <= load_cnt + 1;
-            if ((int'(load_cnt)) == COL_ID * 2) weight <= data_in;
+            if ((int'(load_cnt)) == PE_DIM-1) weight <= data_in;
         end
         else if (load_en) begin
             acc_out <= acc_in + (OUTPUT_LENGTH'(data_in * weight));
         end
     end
+
 endmodule

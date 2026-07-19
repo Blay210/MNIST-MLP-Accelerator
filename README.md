@@ -16,7 +16,16 @@ Verilator는 WSL 환경에서 쉽게 세팅이 가능하기 때문에 모든 세
 verilator --binary --trace-fst --timing -Wno-fatal \
 -Irtl {source files} {simulation file} --top-module {top module file} -o {execution file}
 ```
+이 프로젝트의 경우 아래와 같이 사용하면 된다.
+```
+verilator --binary --trace-fst --timing -Wno-fatal \
+-Irtl rtl/*.sv sim/tb_systolic_array.sv --top-module tb_systolic_array -o sim_out
+```
 #### 2. Execute Simulation File
+```
+./obj_dir/{execution file}
+```
+이 프로젝트의 경우 아래와 같이 사용하면 된다.
 ```
 ./obj_dir/sim_out
 ```

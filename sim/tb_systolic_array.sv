@@ -1,4 +1,7 @@
 `timescale 1ns / 1ps
+`include "../rtl/systolic_array.sv"
+`include "../rtl/pe.sv"
+`include "../rtl/accumulator.sv"
 
 module tb_systolic_array;
 
@@ -51,22 +54,24 @@ module tb_systolic_array;
         repeat (2) @(posedge clk);
 
         load_w = 1;
-        for (int t = 0; t < 15; t++) begin
-            for (int i = 0; i < PE_DIM; i++) data_in[i] = i + 1;
-            @(posedge clk);
-        end
-
+        @(posedge clk);
         load_w  = 0;
-        load_en = 1;
-
-        for (int t = 0; t < 16; t++) begin
-            for (int i = 0; i < PE_DIM; i++) data_in[i] = (t == i) ? (i + 1) : 0;
+        for (int t = 0; t < PE_DIM; t++) begin
+            for (int i = 0; i < PE_DIM; i++) data_in[i] = 8-t;
             @(posedge clk);
-            if (done) $display("[TB] cycle %0t: done=1, acc_out[0]=%0d", $time, acc_out[0]);
         end
-        load_en = 0;
+        for (int i = 0; i < PE_DIM; i++) data_in[i] = 0;
 
-        repeat (3) @(posedge clk);
+        @(posedge clk);
+
+        load_en = 1;
+        @(posedge clk);
+
+        load_en = 0;
+        for (int i = 0; i < PE_DIM; i++) data_in[i] = i + 1;
+        @(posedge clk);
+
+        repeat (20) @(posedge clk);
         $display("[TB] 스모크 테스트 종료 -- 파형에서 상태 전이가 IDLE->LOAD->CALC->DONE 순서로 보이는지 확인해봐");
         $finish;
     end

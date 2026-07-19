@@ -33,6 +33,8 @@ module systolic_array #(
 
     logic [4:0] cnt;
 
+    logic internal_load_w, internal_load_en;
+
     // state transition (sequential)
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -56,7 +58,6 @@ module systolic_array #(
 
     // state condition
     always_comb begin
-        done = 0;
         next_state = current_state;
 
         case (current_state)
@@ -75,15 +76,30 @@ module systolic_array #(
             end
 
             DONE: begin
-                done = 1;
                 next_state = IDLE;
             end
 
             default: begin
                 next_state = IDLE;
             end
-
         endcase
+    end
+
+
+    // control internal data load signals
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            internal_load_w <= 0;
+            internal_load_en <= 0;
+        end
+        else if (load_w) internal_load_w <= 1;
+        else if (load_en) begin 
+            internal_load_w <= 0;
+            internal_load_en <= 1;
+        end
+        else if (done) begin
+            internal_load_en <= 0;
+        end
     end
 
     
@@ -131,6 +147,7 @@ module systolic_array #(
                 result[i] <= '0;
                 acc_out[i] <= '0;
             end
+            done <= 0;
         end else if (current_state == CALC) begin
             if (int'(cnt) >= PE_DIM && int'(cnt) < PE_DIM*2) begin
                 result[int'(cnt)-PE_DIM] <= v_wire[PE_DIM][int'(cnt)-PE_DIM];
@@ -139,6 +156,7 @@ module systolic_array #(
             for (int i = 0; i < PE_DIM; i++) begin
                 acc_out[i] <= result[i];
             end
+            done <= 1;
         end
     end
 
@@ -149,12 +167,13 @@ module systolic_array #(
         for (i = 0; i < PE_DIM; i++) begin : row
             for (j = 0; j < PE_DIM; j++) begin : col
                 pe #(
-                    .COL_ID(j)
+                    .COL_ID(j),
+                    .PE_DIM(PE_DIM)
                 ) u_pe (
                     .clk(clk),
                     .rst_n(rst_n),
-                    .load_w(load_w),
-                    .load_en(load_en),
+                    .load_w(internal_load_w),
+                    .load_en(internal_load_en),
                     .data_in(h_wire[i][j]),
                     .acc_in(v_wire[i][j]),
                     .data_out(h_wire[i][j+1]),
