@@ -1,4 +1,4 @@
-TOP        ?= tb_systolic_array
+TOP        ?= tb_bram_controller
 FILELIST   ?= verilog.f
 
 OBJ_DIR    ?= obj_dir

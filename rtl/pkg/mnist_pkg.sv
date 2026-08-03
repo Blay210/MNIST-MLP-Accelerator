@@ -35,5 +35,23 @@ package mnist_pkg;
         SYS_DONE = 2'b11
     } sys_state_t;
 
+    typedef enum logic [1:0] {
+        BRAM_IDLE,
+        BRAM_WEIGHT,
+        BRAM_DATA,
+        BRAM_DONE
+    } bram_state_t;
+
+    typedef enum logic[1:0] {
+        REQ_NONE,
+        REQ_WEIGHT,
+        REQ_DATA
+    } req_type_t;
+
+    typedef struct packed {
+        logic [6:0] kt;   // K-tile index, 0~97
+        logic [3:0] nt;   // N-tile index, 0~15
+        logic [7:0] n_total;
+    } matrix_size_t;
     
 endpackage
