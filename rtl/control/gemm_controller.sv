@@ -14,16 +14,10 @@ module fsm #(
     input logic [MAX_DIM_IDX-1:0] N_total
 );
 
+    import mnist_pkg::*;
+    
     // define states
-    typedef enum logic [2:0] {
-        IDLE = 3'd0,
-        LOAD_WEIGHT = 3'd1,
-        LOAD_DATA = 3'd2,
-        ACC = 3'd3,
-        COL_END = 3'd4,
-        DONE = 3'd5
-    } state_t;
-    state_t current_state, next_state;
+    gemm_state_t current_state, next_state;
 
     // Weight Dim : K x N
     logic [MAX_ITER-1:0] K_iter_reg;

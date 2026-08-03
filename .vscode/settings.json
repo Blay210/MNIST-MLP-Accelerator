@@ -1,0 +1,4 @@
+{
+    "verilog.linting.linter": "slang",
+    "verilog.linting.slang.arguments": "-f verilog.f"
+}
