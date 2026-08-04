@@ -34,6 +34,7 @@ module pe #(
                 if ((int'(load_cnt)) == PE_DIM-1) weight <= data_in;
             end
             else if (start_calc) begin
+                load_cnt <= '0;
                 acc_out <= acc_in + (OUTPUT_LENGTH'(data_in * weight));
             end
         end

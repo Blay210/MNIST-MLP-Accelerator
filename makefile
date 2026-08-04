@@ -1,4 +1,4 @@
-TOP        ?= tb_bram_controller
+TOP        ?= tb_mnist_mlp
 FILELIST   ?= verilog.f
 
 OBJ_DIR    ?= obj_dir

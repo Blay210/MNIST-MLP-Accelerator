@@ -1,3 +1,5 @@
 wave.fst
 obj_dir
 wave.gtkw
+python/data
+python/outputs

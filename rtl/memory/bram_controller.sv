@@ -11,6 +11,7 @@ module bram_controller #(
     input  logic weight_req,
     input  logic data_req,
     input  logic write_req,
+    input  logic commit_req,
 
     input  logic [3:0] write_nt,
     input  mnist_pkg::data_vec_t write_data,
@@ -23,6 +24,7 @@ module bram_controller #(
     // bram_controller -> FSM
     output logic valid,
     output logic write_done,
+    output logic commit_done,
     output mnist_pkg::data_vec_t out
 );
 
@@ -46,10 +48,12 @@ module bram_controller #(
     logic [3:0] write_nt_reg;
     data_vec_t data_write_reg;
 
-    initial begin
-        $readmemh("./rtl/memory/w_data.mem", w_mem);
-        $readmemh("./rtl/memory/m_data.mem", m_mem);
-    end
+    data_t result_buffer [0:N_MAX-1];
+
+    // initial begin
+    //     $readmemh("./rtl/memory/w_data.mem", w_mem);
+    //     $readmemh("./rtl/memory/m_data.mem", m_mem);
+    // end
 
 
     // state conditions
@@ -58,9 +62,10 @@ module bram_controller #(
 
         case (current_state)
             BRAM_IDLE: begin
-                if (weight_req)     next_state = BRAM_WEIGHT;
-                else if (data_req)  next_state = BRAM_DATA;
-                else if (write_req) next_state = BRAM_WRITE;
+                if (weight_req)      next_state = BRAM_WEIGHT;
+                else if (data_req)   next_state = BRAM_DATA;
+                else if (write_req)  next_state = BRAM_WRITE;
+                else if (commit_req) next_state = BRAM_COMMIT;
             end
 
             BRAM_WEIGHT: begin
@@ -78,6 +83,10 @@ module bram_controller #(
                 next_state = BRAM_DONE;
             end
 
+            BRAM_COMMIT: begin
+                next_state = BRAM_DONE;
+            end
+
             BRAM_DONE: begin
                 if (req_type == REQ_WEIGHT) begin
                     if (iter_out == PE_DIM-1)
@@ -87,6 +96,9 @@ module bram_controller #(
                     next_state = BRAM_IDLE;
                 end
                 else if (req_type == REQ_WRITE) begin
+                    next_state = BRAM_IDLE;
+                end
+                else if (req_type == REQ_COMMIT) begin
                     next_state = BRAM_IDLE;
                 end
             end
@@ -139,6 +151,9 @@ module bram_controller #(
             else if (write_req)
                 req_type <= REQ_WRITE;
 
+            else if (commit_req)
+                req_type <= REQ_COMMIT;
+
             else
                 req_type <= REQ_NONE;
 
@@ -147,14 +162,20 @@ module bram_controller #(
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            write_done <= 1'b0;
+            write_done  <= 1'b0;
+            commit_done <= 1'b0;
         end
         else begin
-            write_done <= 1'b0;
+            write_done  <= 1'b0;
+            commit_done <= 1'b0;
 
-            if (current_state == BRAM_DONE &&
-                req_type == REQ_WRITE) begin
-                write_done <= 1'b1;
+            if (current_state == BRAM_DONE) begin
+                if (req_type == REQ_WRITE) begin
+                    write_done <= 1'b1;
+                end
+                else if (req_type == REQ_COMMIT) begin
+                    commit_done <= 1'b1;
+                end
             end
         end
     end
@@ -164,6 +185,9 @@ module bram_controller #(
         if (!rst_n) begin
             iter_row <= '0;
             iter_col <= '0;
+            for (int i = 0; i < N_MAX; i++) begin
+                result_buffer[i] <= '0;
+            end
         end
         else case (current_state)
 
@@ -193,7 +217,19 @@ module bram_controller #(
 
             BRAM_WRITE: begin
                 for (int i = 0; i < PE_DIM; i++) begin
-                    m_mem[write_nt_reg * PE_DIM + i] <= data_write_reg[i];
+                    if (write_nt * PE_DIM + i < n_total) begin
+                        result_buffer[write_nt_reg * PE_DIM + i] <= data_write_reg[i];
+                    end
+                end
+            end
+
+            BRAM_COMMIT: begin
+                for (int i = 0; i < N_MAX; i++) begin
+                    if (i < n_total_reg)
+                        m_mem[i] <= result_buffer[i];
+                end
+                for (int i = 0; i < N_MAX; i++) begin
+                    result_buffer[i] <= '0;
                 end
             end
 

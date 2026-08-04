@@ -1,153 +1,246 @@
 `timescale 1ns/1ps
 
-module fsm #(
-    parameter int MAX_DIM_IDX = 10,
-    parameter int MAX_ITER = 7,
-    parameter int PE_DIM = 8,
-    parameter int DATA_LENGTH = 8,
-    parameter int OUTPUT_LENGTH = 32
-)(
-    input logic clk,
-    input logic rst_n,
-    input logic start,
-    input logic [MAX_DIM_IDX-1:0] K_total,
-    input logic [MAX_DIM_IDX-1:0] N_total
+module gemm_controller (
+    input  logic clk,
+    input  logic rst_n,
+    input  logic start,
+    input  logic [6:0] k_idx_max,
+    input  logic [3:0] n_idx_max,
+    input  logic [7:0] n_total,
+    input  logic relu_en,
+    input  logic [4:0] shift_amount,
+    output logic done
 );
 
     import mnist_pkg::*;
-    
-    // define states
+
     gemm_state_t current_state, next_state;
 
-    // Weight Dim : K x N
-    logic [MAX_ITER-1:0] K_iter_reg;
-    logic [MAX_ITER-1:0] N_iter_reg;
+    // bram variables
 
-    // iter
-    logic [MAX_ITER-1:0] k_iter;
-    logic [MAX_ITER-1:0] n_iter;
+    // weight matrix size : (K X N)
+    // tile size : (8 x 8)
+    logic [6:0] k_idx_iter;             // current K-tile index, 0~97 (row tile 개수)
+    logic [3:0] n_idx_iter;             // current N-tile index, 0~15 (col tile 개수)
+    logic [6:0] k_idx_max_reg;
+    logic [3:0] n_idx_max_reg;          // total N-tile index
+    logic [7:0] n_total_reg;
 
-    // bram IO
-    // bram Input
-    logic bc_weight, bc_data;
-    logic [6:0] bc_kt;
-    logic [3:0] bc_nt;
-    logic [7:0] bc_n_total;
-    // bram_Output
-    logic bc_valid;
-    logic [DATA_LENGTH-1:0] bc_weight_out [0:PE_DIM-1];
-    logic [DATA_LENGTH-1:0] bc_data_out   [0:PE_DIM-1];
+    logic weight_req, data_req, write_req, commit_req, write_done, commit_done;
 
-    // systolic array IO
-    // systolic array Input
-    logic sa_load_w, sa_load_en;
-    logic [DATA_LENGTH-1  :0] sa_data_in  [0:PE_DIM-1];
-    // systolic array Output
-    logic sa_done;
-    logic [OUTPUT_LENGTH-1:0] sa_data_out [0:PE_DIM-1];
+    logic bram_valid;
+    data_vec_t bram_out;
+    data_vec_t bram_out_buffer;
 
+    logic load_weight, start_calc, systolic_done;
+    acc_vec_t systolic_out;
 
-    // iter variable initializing and setting
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            K_iter_reg <= '0;
-            N_iter_reg <= '0;
-            k_iter <= '0;
-            n_iter <= '0;
-        end
-        else if (start) begin
-            K_iter_reg <= K_total >> 3;
-            N_iter_reg <= N_total >> 3;
-        end
-    end
+    logic [2:0] weight_cnt;
 
-    // state transition
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            current_state <= IDLE;
-        else
-            current_state <= next_state;
-    end
+    logic acc_en, acc_save;
+    acc_vec_t acc_out;
+    data_vec_t acc2data_out;
 
-    // state condition
+    logic relu_en_reg;
+    logic [4:0] shift_amount_reg;
+
+    assign weight_req = (current_state == GEMM_WEIGHT_REQ);
+    assign data_req   = (current_state == GEMM_DATA_REQ);
+    assign write_req  = (current_state == GEMM_WRITE_REQ);
+    assign commit_req = (current_state == GEMM_COMMIT_REQ);
+
+    assign load_weight = (current_state == GEMM_WEIGHT_RECV) && bram_valid;
+    assign start_calc  = (current_state == GEMM_DATA_RECV) && bram_valid;
+
+    assign acc_en   = (current_state == GEMM_ACCUMULATE);
+    assign acc_save = (current_state == GEMM_ACCUMULATE && k_idx_iter == 0);
+
+    assign done = (current_state == GEMM_DONE);
+
     always_comb begin
         next_state = current_state;
 
-        case (current_state)
-            IDLE: begin
-                if (start) next_state = LOAD_WEIGHT;
+        unique case (current_state)
+            GEMM_IDLE: begin
+                if (start) next_state = GEMM_WEIGHT_REQ;
             end
-
-            LOAD_WEIGHT: begin
-                
+            GEMM_WEIGHT_REQ: begin
+                next_state = GEMM_WEIGHT_RECV;
             end
-
-            LOAD_DATA: begin
-                
+            GEMM_WEIGHT_RECV: begin
+                if (bram_valid) next_state = GEMM_WEIGHT_SEND;
             end
-
-            ACC: begin
-                
+            GEMM_WEIGHT_SEND: begin
+                if (weight_cnt == PE_DIM-1) next_state = GEMM_DATA_REQ;
             end
-
-            COL_END: begin
-                
+            GEMM_DATA_REQ: begin
+                next_state = GEMM_DATA_RECV;                
             end
-
-            DONE: begin
-                
+            GEMM_DATA_RECV: begin
+                if (bram_valid) next_state = GEMM_CALC;
             end
-
-            default: next_state = IDLE;
-
+            GEMM_CALC: begin
+                if (systolic_done) next_state = GEMM_ACCUMULATE;
+            end
+            GEMM_ACCUMULATE: begin
+                if (k_idx_iter < k_idx_max_reg)
+                    next_state = GEMM_NEXT_TILE;
+                else if (k_idx_iter == k_idx_max_reg)
+                    next_state = GEMM_WRITE_REQ;
+            end
+            GEMM_WRITE_REQ: begin
+                next_state = GEMM_WRITE_WAIT;
+            end
+            GEMM_WRITE_WAIT: begin
+                if (write_done) next_state = GEMM_NEXT_TILE;
+            end
+            GEMM_NEXT_TILE: begin
+                if (k_idx_iter < k_idx_max_reg) begin
+                    next_state = GEMM_WEIGHT_REQ;
+                end
+                else if (n_idx_iter < n_idx_max_reg) begin
+                    next_state = GEMM_WEIGHT_REQ;
+                end
+                else begin
+                    next_state = GEMM_COMMIT_REQ;
+                end
+            end
+            GEMM_COMMIT_REQ: begin
+                next_state = GEMM_COMMIT_WAIT;
+            end
+            GEMM_COMMIT_WAIT: begin
+                if (commit_done) next_state = GEMM_DONE;
+            end
+            GEMM_DONE: begin
+                next_state = GEMM_IDLE;
+            end
+            default: begin
+                next_state = GEMM_IDLE;
+            end
         endcase
     end
 
-    // tiling loop
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            
+
+    // bram buffer
+    always_ff @( posedge clk or negedge rst_n ) begin : bram_buffer_delay
+        if(!rst_n) begin
+            bram_out_buffer <= '{default: '0};
+        end
+        else if (bram_valid) begin
+            bram_out_buffer <= bram_out;
+        end
+        else begin
+            bram_out_buffer <= '{default: '0};
         end
     end
 
-    systolic_array u_sa(
-        // input
+    // gemm iter
+    always_ff @( posedge clk or negedge rst_n ) begin : matrix_meta_data
+        if (!rst_n) begin
+            k_idx_iter <= '0;
+            n_idx_iter <= '0;
+            k_idx_max_reg <= '0;
+            n_idx_max_reg <= '0;
+            n_total_reg   <= '0;
+        end
+        else if (start && current_state == GEMM_IDLE) begin
+            k_idx_iter <= '0;
+            n_idx_iter <= '0;
+            k_idx_max_reg <= k_idx_max;
+            n_idx_max_reg <= n_idx_max;
+            n_total_reg <= n_total;
+        end
+        else if (current_state == GEMM_NEXT_TILE) begin
+            if (k_idx_iter < k_idx_max_reg) begin
+                k_idx_iter <= k_idx_iter + 1'b1;
+            end
+            else if (
+                (k_idx_iter == (k_idx_max_reg)) && 
+                (n_idx_iter < (n_idx_max_reg))
+            ) begin
+                k_idx_iter <= '0;
+                n_idx_iter <= n_idx_iter + 1'b1;
+            end
+        end
+    end
+
+    // quantizer option
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            relu_en_reg      <= 1'b0;
+            shift_amount_reg <= '0;
+        end
+        else if (current_state == GEMM_IDLE && start) begin
+            relu_en_reg      <= relu_en;
+            shift_amount_reg <= shift_amount;
+        end
+    end
+
+    // weight load counter
+    always_ff @( posedge clk or negedge rst_n ) begin
+        if (!rst_n) begin
+            weight_cnt <= 0;
+        end
+        else if (current_state != GEMM_WEIGHT_SEND) begin
+            weight_cnt <= 0;
+        end
+        else if (weight_cnt < PE_DIM-1) begin
+            weight_cnt <= weight_cnt + 1;
+        end
+    end
+
+    // current state <= next state
+    always_ff @( posedge clk or negedge rst_n ) begin
+        if (!rst_n) begin
+            current_state <= GEMM_IDLE;
+        end
+        else begin
+            current_state <= next_state;
+        end
+    end
+
+    bram_controller u_bram_controller(
         .clk(clk),
         .rst_n(rst_n),
-        .load_w(sa_load_w),
-        .load_en(sa_load_en),
-        .data_in(sa_data_in),
-        // output
-        .done(sa_done),
-        .acc_out(sa_data_out)
+        .weight_req(weight_req),
+        .data_req(data_req),
+        .write_req(write_req),
+        .commit_req(commit_req),
+        .write_nt(n_idx_iter),
+        .write_data(acc2data_out),
+        .kt(k_idx_iter),
+        .nt(n_idx_iter),
+        .n_total(n_total_reg),
+        .valid(bram_valid),
+        .write_done(write_done),
+        .commit_done(commit_done),
+        .out(bram_out)
     );
 
-    accumulator u_acc(
-        // input
+    systolic_array u_systolic_array (
+        .clk(clk),
+        .rst_n(rst_n),
+        .load_weight(load_weight),
+        .start_calc(start_calc),
+        .data_in(bram_out_buffer),
+        .data_out(systolic_out),
+        .done(systolic_done)
+    );
+
+    accumulator u_accumulator (
         .clk(clk),
         .rst_n(rst_n),
         .save(acc_save),
         .acc_en(acc_en),
-        .acc_in(acc_data_in),
-        // output
-        .acc_out(acc_data_out)
+        .acc_in(systolic_out),
+        .acc_out(acc_out)
     );
 
-    bram_controller #(
-        .DATA_LENGTH(DATA_LENGTH),
-        .PE_DIM(PE_DIM)
-    ) u_bc (
-        // input
-        .weight_req(bc_weight),
-        .data_req(bc_data),
-        .kt(bc_kt),
-        .nt(bc_nt),
-        .n_total(bc_n_total),
-        // output
-        .valid(bc_valid),
-        .weight_out(bc_weight_out),
-        .data_out(bc_data_out)
+    requantizer u_requantizer (
+        .relu_en(relu_en_reg),
+        .shift_amount(shift_amount_reg),
+        .acc_in(acc_out),
+        .data_out(acc2data_out)
     );
-
 
 endmodule

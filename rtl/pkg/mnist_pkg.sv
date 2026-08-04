@@ -19,13 +19,27 @@ package mnist_pkg;
         MEM_RESULT
     } mem_kind_t;
 
-    typedef enum logic [2:0] {
-        IDLE = 3'd0,
-        LOAD_WEIGHT = 3'd1,
-        LOAD_DATA = 3'd2,
-        ACC = 3'd3,
-        COL_END = 3'd4,
-        DONE = 3'd5
+    typedef enum logic [4:0] {
+        GEMM_IDLE,
+
+        GEMM_WEIGHT_REQ,
+        GEMM_WEIGHT_RECV,
+        GEMM_WEIGHT_SEND,
+
+        GEMM_DATA_REQ,
+        GEMM_DATA_RECV,
+        GEMM_CALC,
+
+        GEMM_ACCUMULATE,
+
+        GEMM_WRITE_REQ,
+        GEMM_WRITE_WAIT,
+
+        GEMM_COMMIT_REQ,
+        GEMM_COMMIT_WAIT,
+
+        GEMM_NEXT_TILE,
+        GEMM_DONE
     } gemm_state_t;
 
     typedef enum logic [1:0] {
@@ -40,14 +54,16 @@ package mnist_pkg;
         BRAM_WEIGHT,
         BRAM_DATA,
         BRAM_WRITE,
+        BRAM_COMMIT,
         BRAM_DONE
     } bram_state_t;
 
-    typedef enum logic[1:0] {
+    typedef enum logic[2:0] {
         REQ_NONE,
         REQ_WEIGHT,
         REQ_DATA,
-        REQ_WRITE
+        REQ_WRITE,
+        REQ_COMMIT
     } req_type_t;
 
     typedef struct packed {
