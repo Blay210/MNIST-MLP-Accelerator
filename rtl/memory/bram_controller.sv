@@ -10,6 +10,10 @@ module bram_controller #(
     // FSM -> bram_controller
     input  logic weight_req,
     input  logic data_req,
+    input  logic write_req,
+
+    input  logic [3:0] write_nt,
+    input  mnist_pkg::data_vec_t write_data,
 
     // KXN matrix (weight)
     input  logic [6:0] kt,   // K-tile index, 0~97
@@ -18,6 +22,7 @@ module bram_controller #(
 
     // bram_controller -> FSM
     output logic valid,
+    output logic write_done,
     output mnist_pkg::data_vec_t out
 );
 
@@ -38,6 +43,9 @@ module bram_controller #(
     logic [3:0] nt_reg;
     logic [7:0] n_total_reg;
 
+    logic [3:0] write_nt_reg;
+    data_vec_t data_write_reg;
+
     initial begin
         $readmemh("./rtl/memory/w_data.mem", w_mem);
         $readmemh("./rtl/memory/m_data.mem", m_mem);
@@ -50,8 +58,9 @@ module bram_controller #(
 
         case (current_state)
             BRAM_IDLE: begin
-                if (weight_req)    next_state = BRAM_WEIGHT;
-                else if (data_req) next_state = BRAM_DATA;
+                if (weight_req)     next_state = BRAM_WEIGHT;
+                else if (data_req)  next_state = BRAM_DATA;
+                else if (write_req) next_state = BRAM_WRITE;
             end
 
             BRAM_WEIGHT: begin
@@ -65,12 +74,19 @@ module bram_controller #(
                     next_state = BRAM_DONE;
             end
 
+            BRAM_WRITE: begin
+                next_state = BRAM_DONE;
+            end
+
             BRAM_DONE: begin
                 if (req_type == REQ_WEIGHT) begin
                     if (iter_out == PE_DIM-1)
                         next_state = BRAM_IDLE;
                 end
                 else if (req_type == REQ_DATA) begin
+                    next_state = BRAM_IDLE;
+                end
+                else if (req_type == REQ_WRITE) begin
                     next_state = BRAM_IDLE;
                 end
             end
@@ -91,15 +107,21 @@ module bram_controller #(
 
     always_ff @( posedge clk or negedge rst_n ) begin
         if (!rst_n) begin
-            kt_reg      <= '0;
-            nt_reg      <= '0;
-            n_total_reg <= '0;
+            kt_reg         <= '0;
+            nt_reg         <= '0;
+            n_total_reg    <= '0;
+            write_nt_reg   <= '0;
+            data_write_reg <= '{default:'0};
         end
         else if (current_state == BRAM_IDLE &&
                 (weight_req || data_req)) begin
             kt_reg      <= kt;
             nt_reg      <= nt;
             n_total_reg <= n_total;
+        end
+        else if (current_state == BRAM_IDLE && write_req) begin
+            write_nt_reg   <= write_nt;
+            data_write_reg <= write_data;
         end
     end
 
@@ -108,20 +130,37 @@ module bram_controller #(
             req_type <= REQ_NONE;
         end
         else if (current_state == BRAM_IDLE) begin
-            if (weight_req) begin
+            if (weight_req)
                 req_type <= REQ_WEIGHT;
-            end
-            else if (data_req) begin
+
+            else if (data_req)
                 req_type <= REQ_DATA;
-            end
-            else begin
+
+            else if (write_req)
+                req_type <= REQ_WRITE;
+
+            else
                 req_type <= REQ_NONE;
+
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            write_done <= 1'b0;
+        end
+        else begin
+            write_done <= 1'b0;
+
+            if (current_state == BRAM_DONE &&
+                req_type == REQ_WRITE) begin
+                write_done <= 1'b1;
             end
         end
     end
 
     // memory load
-    always_ff @(posedge clk or negedge rst_n) begin
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             iter_row <= '0;
             iter_col <= '0;
@@ -152,6 +191,12 @@ module bram_controller #(
                 end
             end
 
+            BRAM_WRITE: begin
+                for (int i = 0; i < PE_DIM; i++) begin
+                    m_mem[write_nt_reg * PE_DIM + i] <= data_write_reg[i];
+                end
+            end
+
             default: begin
             end
         endcase
@@ -172,8 +217,8 @@ module bram_controller #(
             end
 
             BRAM_DONE:begin
-                valid <= 1;
                 if (req_type == REQ_WEIGHT) begin
+                    valid <= 1'b1;
                     for (int i = 0; i < PE_DIM; i++) begin
                         out[i] <= data_reg[i][iter_out];
                     end
@@ -182,6 +227,7 @@ module bram_controller #(
                     end
                 end
                 else if (req_type == REQ_DATA) begin
+                    valid <= 1'b1;
                     for (int i = 0; i < PE_DIM; i++) begin
                         out[i] <= data_reg[0][i];
                     end

@@ -35,17 +35,19 @@ package mnist_pkg;
         SYS_DONE = 2'b11
     } sys_state_t;
 
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         BRAM_IDLE,
         BRAM_WEIGHT,
         BRAM_DATA,
+        BRAM_WRITE,
         BRAM_DONE
     } bram_state_t;
 
     typedef enum logic[1:0] {
         REQ_NONE,
         REQ_WEIGHT,
-        REQ_DATA
+        REQ_DATA,
+        REQ_WRITE
     } req_type_t;
 
     typedef struct packed {

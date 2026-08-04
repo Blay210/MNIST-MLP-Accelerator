@@ -4,40 +4,51 @@ module tb_bram_controller;
 
     import mnist_pkg::*;
 
-    localparam int CLK_PERIOD = 10;
+    localparam int CLK_PERIOD     = 10;
     localparam int TIMEOUT_CYCLES = 300;
 
     /*
-     * 테스트할 tile
-     *
-     * K tile 1:
-     * global K index = 8 ~ 15
-     *
-     * N tile 2:
-     * global N index = 16 ~ 23
+     * 기존 read test 설정
      */
     localparam int TEST_KT      = 1;
     localparam int TEST_NT      = 2;
     localparam int TEST_N_TOTAL = 16;
+
+    /*
+     * Write/read-back test 설정
+     *
+     * write_nt=3이면:
+     * m_mem[24:31]에 저장
+     *
+     * data read 시 kt=3으로 요청하면:
+     * m_mem[24:31]을 읽음
+     */
+    localparam int WRITE_TILE = 3;
 
     logic clk;
     logic rst_n;
 
     logic weight_req;
     logic data_req;
+    logic write_req;
+
+    logic [3:0] write_nt;
+    data_vec_t write_data;
 
     logic [6:0] kt;
     logic [3:0] nt;
     logic [7:0] n_total;
 
     logic      valid;
+    logic      write_done;
     data_vec_t out;
 
     /*
-     * Reference data
+     * Expected values
      */
     data_t expected_weight [0:PE_DIM-1][0:PE_DIM-1];
     data_t expected_data   [0:PE_DIM-1];
+    data_t expected_write  [0:PE_DIM-1];
 
     int error_count;
 
@@ -51,12 +62,17 @@ module tb_bram_controller;
 
         .weight_req (weight_req),
         .data_req   (data_req),
+        .write_req  (write_req),
+
+        .write_nt   (write_nt),
+        .write_data (write_data),
 
         .kt         (kt),
         .nt         (nt),
         .n_total    (n_total),
 
         .valid      (valid),
+        .write_done (write_done),
         .out        (out)
     );
 
@@ -84,8 +100,7 @@ module tb_bram_controller;
     /*
      * Reset
      *
-     * 입력은 negedge에서 변경하고,
-     * DUT는 다음 posedge에서 샘플링한다.
+     * reset 해제도 negedge에서 수행한다.
      */
     task automatic reset_dut;
         begin
@@ -93,6 +108,10 @@ module tb_bram_controller;
 
             weight_req = 1'b0;
             data_req   = 1'b0;
+            write_req  = 1'b0;
+
+            write_nt   = '0;
+            write_data = '{default:'0};
 
             kt         = '0;
             nt         = '0;
@@ -110,71 +129,47 @@ module tb_bram_controller;
 
 
     /*
-     * DUT 내부 simulation memory 초기화
+     * Expected value 설정
      *
-     * $readmemh 파일에 의존하지 않고 TB에서 직접 값을 넣는다.
+     * w_data.mem과 m_data.mem의 test pattern에 맞춘다.
      */
-    task automatic initialize_memories;
-        int address;
-
+    task automatic setup_expected_values;
         begin
             /*
-             * 전체 memory 초기화
-             */
-            foreach (dut.w_mem[i]) begin
-                dut.w_mem[i] = '0;
-            end
-
-            foreach (dut.m_mem[i]) begin
-                dut.m_mem[i] = '0;
-            end
-
-            foreach (expected_weight[row, col]) begin
-                expected_weight[row][col] = '0;
-            end
-
-            foreach (expected_data[i]) begin
-                expected_data[i] = '0;
-            end
-
-
-            /*
-             * Weight tile 값:
+             * Weight:
              *
              * row 0:  1  2  3  4  5  6  7  8
              * row 1:  9 10 11 12 13 14 15 16
              * ...
              * row 7: 57 58 59 60 61 62 63 64
              */
-            for (int row = 0; row < PE_DIM; row++) begin
-                for (int col = 0; col < PE_DIM; col++) begin
-                    expected_weight[row][col]
-                        = data_t'(row * PE_DIM + col + 1);
-
-                    address =
-                        ((row + TEST_KT * PE_DIM)
-                        * TEST_N_TOTAL)
-                        + TEST_NT * PE_DIM
-                        + col;
-
-                    dut.w_mem[address]
-                        = expected_weight[row][col];
-                end
+            foreach (expected_weight[row, col]) begin
+                expected_weight[row][col]
+                    = data_t'(row * PE_DIM + col + 1);
             end
-
 
             /*
-             * Activation tile:
-             *
-             * [11 12 13 14 15 16 17 18]
+             * 초기 activation:
+             * [11,12,13,14,15,16,17,18]
              */
-            for (int i = 0; i < PE_DIM; i++) begin
+            foreach (expected_data[i]) begin
                 expected_data[i] = data_t'(11 + i);
-
-                address = TEST_KT * PE_DIM + i;
-
-                dut.m_mem[address] = expected_data[i];
             end
+
+            /*
+             * Write test data:
+             *
+             * signed 값도 포함해 write/read-back 검증
+             * [21, -22, 23, -24, 25, -26, 27, -28]
+             */
+            expected_write[0] = data_t'( 21);
+            expected_write[1] = data_t'(-22);
+            expected_write[2] = data_t'( 23);
+            expected_write[3] = data_t'(-24);
+            expected_write[4] = data_t'( 25);
+            expected_write[5] = data_t'(-26);
+            expected_write[6] = data_t'( 27);
+            expected_write[7] = data_t'(-28);
         end
     endtask
 
@@ -182,46 +177,37 @@ module tb_bram_controller;
     /*
      * Weight request
      *
-     * 정확한 타이밍:
-     *
      * negedge N0:
-     *     weight_req = 1
-     *     kt/nt/n_total 유효
+     *   request 및 주소 설정
      *
      * posedge P0:
-     *     DUT가 요청과 index를 저장
+     *   DUT가 request와 주소를 latch
      *
      * negedge N1:
-     *     weight_req = 0
-     *
-     * 즉 pulse 길이는 정확히 한 clock이다.
+     *   request 해제
+     *   외부 주소를 poison 값으로 변경
      */
     task automatic issue_weight_request;
         begin
             @(negedge clk);
 
-            kt         = TEST_KT;
-            nt         = TEST_NT;
-            n_total    = TEST_N_TOTAL;
-
             weight_req = 1'b1;
             data_req   = 1'b0;
+            write_req  = 1'b0;
 
+            kt      = TEST_KT;
+            nt      = TEST_NT;
+            n_total = TEST_N_TOTAL;
 
             /*
-             * 요청을 정확히 한 클럭 유지
+             * 정확히 한 클럭 유지
              */
             @(negedge clk);
 
             weight_req = 1'b0;
 
-
             /*
-             * DUT가 입력 index를 제대로 latch했는지 확인하기 위해
-             * 요청 종료 직후 외부 입력을 의도적으로 변경한다.
-             *
-             * 이후 출력이 정상이라면 kt_reg/nt_reg/n_total_reg를
-             * 사용하고 있다는 뜻이다.
+             * 내부 latch 검증용 poison
              */
             kt      = 7'd7;
             nt      = 4'd7;
@@ -233,28 +219,29 @@ module tb_bram_controller;
     /*
      * Data request
      */
-    task automatic issue_data_request;
+    task automatic issue_data_request(
+        input logic [6:0] requested_kt
+    );
         begin
             @(negedge clk);
 
-            kt         = TEST_KT;
-            nt         = TEST_NT;
-            n_total    = TEST_N_TOTAL;
-
             weight_req = 1'b0;
             data_req   = 1'b1;
+            write_req  = 1'b0;
 
+            kt      = requested_kt;
+            nt      = TEST_NT;
+            n_total = TEST_N_TOTAL;
 
             /*
-             * 정확히 한 클럭 pulse
+             * 정확히 한 클럭 유지
              */
             @(negedge clk);
 
             data_req = 1'b0;
 
-
             /*
-             * 요청 당시 값을 latch했는지 확인하기 위한 poison 값
+             * 요청 이후 외부 입력 변경
              */
             kt      = 7'd7;
             nt      = 4'd7;
@@ -264,9 +251,60 @@ module tb_bram_controller;
 
 
     /*
+     * Write request
+     *
+     * negedge N0:
+     *   write_req=1
+     *   write_nt 및 write_data 유효
+     *
+     * posedge P0:
+     *   DUT가 write 정보 latch
+     *
+     * negedge N1:
+     *   write_req=0
+     *   외부 write 데이터 poison 처리
+     *
+     * posedge P1:
+     *   BRAM_WRITE 상태에서 실제 m_mem write
+     *
+     * posedge P2:
+     *   write_done=1
+     */
+    task automatic issue_write_request;
+        begin
+            @(negedge clk);
+
+            weight_req = 1'b0;
+            data_req   = 1'b0;
+            write_req  = 1'b1;
+
+            write_nt = WRITE_TILE;
+
+            for (int i = 0; i < PE_DIM; i++) begin
+                write_data[i] = expected_write[i];
+            end
+
+            /*
+             * 요청을 정확히 한 클럭 유지
+             */
+            @(negedge clk);
+
+            write_req = 1'b0;
+
+            /*
+             * DUT가 요청 순간 데이터를 latch했는지 확인하기 위해
+             * 즉시 외부 입력을 poison 값으로 변경한다.
+             */
+            write_nt   = 4'd15;
+            write_data = '{default:data_t'(8'h55)};
+        end
+    endtask
+
+
+    /*
      * valid 시작 대기
      *
-     * posedge 직후 #1에서 검사하여 NBA update 이후 값을 본다.
+     * posedge 후 #1에서 NBA 반영 이후 값을 확인한다.
      */
     task automatic wait_for_valid;
         int timeout;
@@ -274,8 +312,8 @@ module tb_bram_controller;
         begin
             timeout = 0;
 
-            while (valid !== 1'b1 &&
-                   timeout < TIMEOUT_CYCLES) begin
+            while ((valid !== 1'b1) &&
+                   (timeout < TIMEOUT_CYCLES)) begin
                 @(posedge clk);
                 #1;
 
@@ -293,16 +331,93 @@ module tb_bram_controller;
 
 
     /*
-     * Weight output 검증
+     * write_done 대기
      *
-     * data_reg에 역순으로 저장했으므로 출력 순서는:
+     * 동시에 read-valid이 잘못 올라오지 않는지도 검사한다.
+     */
+    task automatic wait_for_write_done;
+        int timeout;
+
+        begin
+            timeout = 0;
+
+            while ((write_done !== 1'b1) &&
+                   (timeout < TIMEOUT_CYCLES)) begin
+                @(posedge clk);
+                #1;
+
+                if (valid === 1'b1) begin
+                    $error(
+                        "[WRITE TIMING FAIL] valid asserted during write transaction"
+                    );
+
+                    error_count++;
+                end
+
+                timeout++;
+            end
+
+            if (timeout >= TIMEOUT_CYCLES) begin
+                $fatal(
+                    1,
+                    "[TIMEOUT] write_done was not asserted"
+                );
+            end
+
+            /*
+             * write_done이 올라온 동일 cycle에서도
+             * valid은 반드시 0이어야 한다.
+             */
+            if (valid !== 1'b0) begin
+                $error(
+                    "[WRITE TIMING FAIL] valid must be 0 when write_done is asserted"
+                );
+
+                error_count++;
+            end
+            else begin
+                $display(
+                    "[WRITE TIMING PASS] valid remained 0 during write"
+                );
+            end
+        end
+    endtask
+
+
+    /*
+     * write_done pulse 길이 확인
      *
-     * beat 0 -> original col7
-     * beat 1 -> original col6
+     * wait_for_write_done 반환 시점에는 write_done=1이다.
+     * 다음 posedge 이후에는 반드시 0이어야 한다.
+     */
+    task automatic check_write_done_width;
+        begin
+            @(posedge clk);
+            #1;
+
+            if (write_done !== 1'b0) begin
+                $error(
+                    "[WRITE DONE FAIL] write_done is longer than one clock"
+                );
+
+                error_count++;
+            end
+            else begin
+                $display(
+                    "[WRITE DONE PASS] write_done length = 1 clock"
+                );
+            end
+        end
+    endtask
+
+
+    /*
+     * Weight 출력 검증
+     *
+     * 출력 순서:
+     * beat 0 = original col7
      * ...
-     * beat 7 -> original col0
-     *
-     * valid은 정확히 8클럭이어야 한다.
+     * beat 7 = original col0
      */
     task automatic check_weight_output;
         int valid_count;
@@ -315,12 +430,8 @@ module tb_bram_controller;
 
             wait_for_valid();
 
-            /*
-             * wait_for_valid가 반환된 시점의 valid/out이
-             * 첫 번째 출력 beat이다.
-             */
-            while (valid === 1'b1 &&
-                   timeout < TIMEOUT_CYCLES) begin
+            while ((valid === 1'b1) &&
+                   (timeout < TIMEOUT_CYCLES)) begin
 
                 expected_col = PE_DIM - 1 - valid_count;
 
@@ -331,12 +442,6 @@ module tb_bram_controller;
                     expected_col
                 );
 
-                /*
-                 * 8개 row 병렬 비교
-                 *
-                 * valid_count가 8 이상이면 extra beat이므로,
-                 * 배열 index를 사용하지 않고 별도로 오류 처리한다.
-                 */
                 if (valid_count < PE_DIM) begin
                     for (int row = 0; row < PE_DIM; row++) begin
                         if (
@@ -369,7 +474,7 @@ module tb_bram_controller;
                 end
                 else begin
                     $error(
-                        "[WEIGHT TIMING FAIL] extra valid beat detected: beat=%0d",
+                        "[WEIGHT TIMING FAIL] extra valid beat=%0d",
                         valid_count
                     );
 
@@ -383,13 +488,9 @@ module tb_bram_controller;
                 #1;
             end
 
-
-            /*
-             * valid pulse 길이 검사
-             */
             if (valid_count != PE_DIM) begin
                 $error(
-                    "[WEIGHT VALID FAIL] valid length=%0d clocks, expected=%0d clocks",
+                    "[WEIGHT VALID FAIL] valid length=%0d, expected=%0d",
                     valid_count,
                     PE_DIM
                 );
@@ -404,7 +505,6 @@ module tb_bram_controller;
                 );
             end
 
-
             if (timeout >= TIMEOUT_CYCLES) begin
                 $fatal(
                     1,
@@ -414,26 +514,17 @@ module tb_bram_controller;
         end
     endtask
 
-    task automatic setup_expected_values;
-        begin
-            foreach (expected_weight[row, col]) begin
-                expected_weight[row][col]
-                    = data_t'(row * PE_DIM + col + 1);
-            end
-
-            foreach (expected_data[i]) begin
-                expected_data[i] = data_t'(11 + i);
-            end
-        end
-    endtask
 
     /*
-     * Activation output 검증
+     * Data 출력 검증
      *
-     * activation은 valid 1클럭 동안 8개 lane이
-     * 한 번에 출력되어야 한다.
+     * expected_vector를 인자로 받아 초기 data와
+     * write-read-back 결과에 공통으로 사용한다.
      */
-    task automatic check_data_output;
+    task automatic check_data_output(
+        input string     test_name,
+        input data_vec_t expected_vector
+    );
         int valid_count;
         int timeout;
 
@@ -443,12 +534,13 @@ module tb_bram_controller;
 
             wait_for_valid();
 
-            while (valid === 1'b1 &&
-                   timeout < TIMEOUT_CYCLES) begin
+            while ((valid === 1'b1) &&
+                   (timeout < TIMEOUT_CYCLES)) begin
 
                 $display("");
                 $display(
-                    "[DATA BEAT %0d]",
+                    "[%s BEAT %0d]",
+                    test_name,
                     valid_count
                 );
 
@@ -456,20 +548,22 @@ module tb_bram_controller;
                     for (int i = 0; i < PE_DIM; i++) begin
                         if (
                             $signed(out[i]) !==
-                            $signed(expected_data[i])
+                            $signed(expected_vector[i])
                         ) begin
                             $error(
-                                "[DATA FAIL] lane=%0d actual=%0d expected=%0d",
+                                "[%s FAIL] lane=%0d actual=%0d expected=%0d",
+                                test_name,
                                 i,
                                 $signed(out[i]),
-                                $signed(expected_data[i])
+                                $signed(expected_vector[i])
                             );
 
                             error_count++;
                         end
                         else begin
                             $display(
-                                "[DATA PASS] lane=%0d value=%0d",
+                                "[%s PASS] lane=%0d value=%0d",
+                                test_name,
                                 i,
                                 $signed(out[i])
                             );
@@ -478,7 +572,8 @@ module tb_bram_controller;
                 end
                 else begin
                     $error(
-                        "[DATA TIMING FAIL] extra valid beat detected: beat=%0d",
+                        "[%s TIMING FAIL] extra valid beat=%0d",
+                        test_name,
                         valid_count
                     );
 
@@ -492,13 +587,10 @@ module tb_bram_controller;
                 #1;
             end
 
-
-            /*
-             * Data valid은 정확히 한 클럭이어야 함
-             */
             if (valid_count != 1) begin
                 $error(
-                    "[DATA VALID FAIL] valid length=%0d clocks, expected=1 clock",
+                    "[%s VALID FAIL] valid length=%0d, expected=1",
+                    test_name,
                     valid_count
                 );
 
@@ -507,10 +599,10 @@ module tb_bram_controller;
             else begin
                 $display("");
                 $display(
-                    "[DATA VALID PASS] valid length = 1 clock"
+                    "[%s VALID PASS] valid length = 1 clock",
+                    test_name
                 );
             end
-
 
             if (timeout >= TIMEOUT_CYCLES) begin
                 $fatal(
@@ -523,10 +615,7 @@ module tb_bram_controller;
 
 
     /*
-     * Request pulse width assertion
-     *
-     * posedge에서 request가 1이면 다음 posedge에서는
-     * 반드시 0이어야 한다.
+     * Request pulse assertions
      */
     property p_weight_req_one_cycle;
         @(posedge clk)
@@ -539,7 +628,7 @@ module tb_bram_controller;
     else begin
         $fatal(
             1,
-            "[REQUEST TIMING FAIL] weight_req is longer than one clock"
+            "[REQUEST FAIL] weight_req is longer than one clock"
         );
     end
 
@@ -555,26 +644,46 @@ module tb_bram_controller;
     else begin
         $fatal(
             1,
-            "[REQUEST TIMING FAIL] data_req is longer than one clock"
+            "[REQUEST FAIL] data_req is longer than one clock"
+        );
+    end
+
+
+    property p_write_req_one_cycle;
+        @(posedge clk)
+        disable iff (!rst_n)
+
+        write_req |=> !write_req;
+    endproperty
+
+    assert property (p_write_req_one_cycle)
+    else begin
+        $fatal(
+            1,
+            "[REQUEST FAIL] write_req is longer than one clock"
         );
     end
 
 
     /*
-     * 동시에 두 요청을 보내면 안 됨
+     * 세 요청은 동시에 올라가면 안 됨
      */
     property p_requests_mutually_exclusive;
         @(posedge clk)
         disable iff (!rst_n)
 
-        !(weight_req && data_req);
+        !(
+            (weight_req && data_req)  ||
+            (weight_req && write_req) ||
+            (data_req   && write_req)
+        );
     endproperty
 
     assert property (p_requests_mutually_exclusive)
     else begin
         $fatal(
             1,
-            "[REQUEST FAIL] weight_req and data_req asserted together"
+            "[REQUEST FAIL] multiple requests asserted together"
         );
     end
 
@@ -583,15 +692,19 @@ module tb_bram_controller;
      * Main test
      */
     initial begin
+        data_vec_t expected_data_vector;
+        data_vec_t expected_write_vector;
+
         error_count = 0;
 
-        /*
-         * DUT 내부 initial $readmemh와 충돌하지 않도록
-         * time 0 이후 TB 값으로 덮어쓴다.
-         */
-        #1;
-        reset_dut();
         setup_expected_values();
+
+        for (int i = 0; i < PE_DIM; i++) begin
+            expected_data_vector[i]  = expected_data[i];
+            expected_write_vector[i] = expected_write[i];
+        end
+
+        reset_dut();
 
 
         /*
@@ -607,17 +720,13 @@ module tb_bram_controller;
         issue_weight_request();
         check_weight_output();
 
-
-        /*
-         * BRAM_IDLE 복귀 여유
-         */
         repeat (2) @(posedge clk);
         #1;
 
 
         /*
          * ----------------------------------------
-         * Test 2: Activation read
+         * Test 2: Initial activation read
          * ----------------------------------------
          */
         $display("");
@@ -625,8 +734,52 @@ module tb_bram_controller;
         $display("Test 2: BRAM activation transaction");
         $display("========================================");
 
-        issue_data_request();
-        check_data_output();
+        issue_data_request(TEST_KT);
+        check_data_output(
+            "DATA",
+            expected_data_vector
+        );
+
+        repeat (2) @(posedge clk);
+        #1;
+
+
+        /*
+         * ----------------------------------------
+         * Test 3: Write transaction
+         * ----------------------------------------
+         */
+        $display("");
+        $display("========================================");
+        $display("Test 3: BRAM write transaction");
+        $display("========================================");
+
+        issue_write_request();
+        wait_for_write_done();
+        check_write_done_width();
+
+        repeat (1) @(posedge clk);
+        #1;
+
+
+        /*
+         * ----------------------------------------
+         * Test 4: Write-read-back
+         *
+         * write_nt=3으로 썼으므로
+         * data read에서는 kt=3으로 읽는다.
+         * ----------------------------------------
+         */
+        $display("");
+        $display("========================================");
+        $display("Test 4: BRAM write-read-back");
+        $display("========================================");
+
+        issue_data_request(WRITE_TILE);
+        check_data_output(
+            "READBACK",
+            expected_write_vector
+        );
 
 
         /*
@@ -638,7 +791,7 @@ module tb_bram_controller;
 
         if (error_count == 0) begin
             $display("========================================");
-            $display("[TEST PASS] BRAM controller passed");
+            $display("[TEST PASS] BRAM read/write controller passed");
             $display("========================================");
         end
         else begin
@@ -658,7 +811,7 @@ module tb_bram_controller;
      * Global timeout
      */
     initial begin
-        repeat (1000) @(posedge clk);
+        repeat (1500) @(posedge clk);
 
         $fatal(
             1,
