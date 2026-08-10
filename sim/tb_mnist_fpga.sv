@@ -20,8 +20,9 @@ module tb_mnist_fpga;
     localparam int W2_SIZE = K2 * N2;
 
     // 기존 검증 TB에서 사용한 값으로 바꿀 것
-    localparam logic [4:0] L1_SHIFT = 5'd0;
-    localparam logic [4:0] L2_SHIFT = 5'd0;
+    localparam logic [4:0] L1_SHIFT = 5'd11;
+    localparam logic [4:0] L2_SHIFT = 5'd7;
+    
 
 
     // ============================================================
@@ -499,17 +500,17 @@ module tb_mnist_fpga;
         // --------------------------------------------------------
 
         $readmemh(
-            "./sim/data/mnist_input.mem",
+            "./rtl/memory/reference_input.mem",
             input_image
         );
 
         $readmemh(
-            "./sim/data/layer1_weight.mem",
+            "./rtl/memory/layer1_weight.mem",
             layer1_weight
         );
 
         $readmemh(
-            "./sim/data/layer2_weight.mem",
+            "./rtl/memory/layer2_weight.mem",
             layer2_weight
         );
 
