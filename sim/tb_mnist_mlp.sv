@@ -61,7 +61,7 @@ module tb_mnist_mlp;
     int layer2_done_count;
 
 
-    gemm_controller dut (
+    mnist_accelerator dut (
         .clk          (clk),
         .rst_n        (rst_n),
         .start        (start),
