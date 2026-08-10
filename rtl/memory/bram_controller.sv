@@ -63,6 +63,7 @@ module bram_controller (
     logic m_pending;
     logic data_issue_done;
     logic data_capture_done;
+    logic commit_done_internal;
 
     logic [PE_DIM_IDX-1:0] m_row_d;
 
@@ -158,13 +159,12 @@ module bram_controller (
             end
 
             BRAM_WEIGHT: begin
-                if ((iter_row == PE_DIM-1) &&
-                    (iter_col == PE_DIM-1))
+                if (weight_capture_done)
                     next_state = BRAM_DONE;
             end
 
             BRAM_DATA: begin
-                if (iter_row == PE_DIM-1)
+                if (data_capture_done)
                     next_state = BRAM_DONE;
             end
 
@@ -173,7 +173,8 @@ module bram_controller (
             end
 
             BRAM_COMMIT: begin
-                next_state = BRAM_DONE;
+                if (commit_idx == n_total_reg - 1'b1)
+                    next_state = BRAM_DONE;
             end
 
             BRAM_DONE: begin
@@ -275,18 +276,19 @@ module bram_controller (
             iter_row <= '0;
             iter_col <= '0;
 
-            w_pending          <= 1'b0;
-            weight_issue_done  <= 1'b0;
-            weight_capture_done <= 1'b0;
-            w_row_d            <= '0;
-            w_col_d            <= '0;
+            w_pending            <= 1'b0;
+            weight_issue_done    <= 1'b0;
+            weight_capture_done  <= 1'b0;
+            w_row_d              <= '0;
+            w_col_d              <= '0;
 
-            m_pending          <= 1'b0;
-            data_issue_done    <= 1'b0;
-            data_capture_done  <= 1'b0;
-            m_row_d            <= '0;
+            m_pending            <= 1'b0;
+            data_issue_done      <= 1'b0;
+            data_capture_done    <= 1'b0;
+            m_row_d              <= '0;
 
-            commit_idx <= '0;
+            commit_idx           <= '0;
+            commit_done_internal <= '0;
 
             for (int i = 0; i < N_MAX; i++) begin
                 result_buffer[i] <= '0;
@@ -299,15 +301,19 @@ module bram_controller (
                     iter_row <= '0;
                     iter_col <= '0;
 
-                    w_pending           <= 1'b0;
-                    weight_issue_done   <= 1'b0;
-                    weight_capture_done <= 1'b0;
+                    w_pending            <= 1'b0;
+                    weight_issue_done    <= 1'b0;
+                    weight_capture_done  <= 1'b0;
+                    w_row_d              <= '0;
+                    w_col_d              <= '0;
 
-                    m_pending           <= 1'b0;
-                    data_issue_done     <= 1'b0;
-                    data_capture_done   <= 1'b0;
+                    m_pending            <= 1'b0;
+                    data_issue_done      <= 1'b0;
+                    data_capture_done    <= 1'b0;
+                    m_row_d              <= '0;
 
-                    commit_idx <= '0;
+                    commit_idx           <= '0;
+                    commit_done_internal <= '0;
                 end
 
 
@@ -318,8 +324,17 @@ module bram_controller (
 
                     // Previous cycle's BRAM response
                     if (w_pending) begin
-                        data_reg[w_row_d][PE_DIM-w_col_d-1]
-                            <= w_rdata;
+                        data_reg[w_row_d][PE_DIM-w_col_d-1] <= w_rdata;
+
+                        if (kt_reg == 0 && nt_reg == 0) begin
+                            $display(
+                                "[W_CAPTURE] row=%0d col=%0d dst=%0d data=%0d",
+                                w_row_d,
+                                w_col_d,
+                                PE_DIM-w_col_d-1,
+                                $signed(w_rdata)
+                            );
+                        end
 
                         if ((w_row_d == PE_DIM-1) &&
                             (w_col_d == PE_DIM-1)) begin
@@ -329,8 +344,8 @@ module bram_controller (
 
                     // Issue a new BRAM request
                     if (!weight_issue_done) begin
-                        w_row_d <= iter_row;
-                        w_col_d <= iter_col;
+                        w_row_d   <= iter_row;
+                        w_col_d   <= iter_col;
                         w_pending <= 1'b1;
 
                         if ((iter_row == PE_DIM-1) &&
@@ -389,6 +404,17 @@ module bram_controller (
                 // ------------------------------------
                 BRAM_WRITE: begin
                     for (int i = 0; i < PE_DIM; i++) begin
+                        if (write_nt_reg == 1) begin
+                            $display(
+                                "[WRITE] nt=%0d lane=%0d index=%0d data=%0d valid=%0d",
+                                write_nt_reg,
+                                i,
+                                write_nt_reg * PE_DIM + i,
+                                $signed(data_write_reg[i]),
+                                (write_nt_reg * PE_DIM + i < n_total_reg)
+                            );
+                        end
+
                         if (write_nt_reg * PE_DIM + i < n_total_reg) begin
                             result_buffer[
                                 write_nt_reg * PE_DIM + i

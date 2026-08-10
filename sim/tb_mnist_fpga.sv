@@ -20,8 +20,17 @@ module tb_mnist_fpga;
     localparam int W2_SIZE = K2 * N2;
 
     // 기존 검증 TB에서 사용한 값으로 바꿀 것
-    localparam logic [4:0] L1_SHIFT = 5'd11;
-    localparam logic [4:0] L2_SHIFT = 5'd7;
+    localparam logic [6:0] L1_K_IDX_MAX = 7'd97;
+    localparam logic [3:0] L1_N_IDX_MAX = 4'd15;
+    localparam logic [7:0] L1_N_TOTAL   = 8'd128;
+    localparam logic [4:0] L1_SHIFT     = 5'd11;
+    localparam logic       L1_RELU      = 1'b1;
+
+    localparam logic [6:0] L2_K_IDX_MAX = 7'd15;
+    localparam logic [3:0] L2_N_IDX_MAX = 4'd1;
+    localparam logic [7:0] L2_N_TOTAL   = 8'd10;
+    localparam logic [4:0] L2_SHIFT     = 5'd7;
+    localparam logic       L2_RELU      = 1'b0;
     
 
 
@@ -556,12 +565,30 @@ module tb_mnist_fpga;
         $display("====================================");
 
         run_gemm(
-            7'd97,
-            4'd15,
-            8'd128,
-            1'b1,
+            L1_K_IDX_MAX,
+            L1_N_IDX_MAX,
+            L1_N_TOTAL,
+            L1_RELU,
             L1_SHIFT
         );
+
+        $display("");
+        $display("====================================");
+        $display(" Layer 1 committed activation");
+        $display("====================================");
+
+        for (int i = 0; i < 16; i++) begin
+            data_t temp;
+
+            read_activation(i, temp);
+
+            $display(
+                "hidden[%0d] = %0d",
+                i,
+                $signed(temp)
+            );
+        end
+
 
 
         // ========================================================
@@ -591,11 +618,12 @@ module tb_mnist_fpga;
         $display(" Starting Layer 2 : 128 -> 10");
         $display("====================================");
 
+        
         run_gemm(
-            7'd15,
-            4'd1,
-            8'd10,
-            1'b0,
+            L2_K_IDX_MAX,
+            L2_N_IDX_MAX,
+            L2_N_TOTAL,
+            L2_RELU,
             L2_SHIFT
         );
 
