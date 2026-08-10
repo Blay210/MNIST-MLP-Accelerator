@@ -5,6 +5,8 @@ package mnist_pkg;
     localparam int PE_DIM = 8;
     localparam int DATA_LENGTH = 8;
     localparam int OUTPUT_LENGTH = 32;
+    localparam int K_MAX = 784;
+    localparam int N_MAX = 128;
 
     typedef logic signed [DATA_LENGTH-1:0]   data_t ;
     typedef logic signed [OUTPUT_LENGTH-1:0] acc_t;

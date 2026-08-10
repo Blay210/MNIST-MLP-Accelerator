@@ -10,7 +10,20 @@ module mnist_accelerator (
     input  mnist_pkg::n_total_t n_total,
     input  mnist_pkg::shift_t   shift_amount,
     
-    output logic done
+    output logic done,
+
+    // Weight BRAM
+    output logic        w_en,
+    output logic [16:0] w_addr,
+    input  mnist_pkg::data_t w_rdata,
+
+    // Activation BRAM
+    output logic        m_en,
+    output logic        m_we,
+    output logic [9:0]  m_addr,
+    output mnist_pkg::data_t m_wdata,
+    input  mnist_pkg::data_t m_rdata
+
 );
 
     import mnist_pkg::*;
@@ -213,7 +226,17 @@ module mnist_accelerator (
         .valid(bram_valid),
         .write_done(write_done),
         .commit_done(commit_done),
-        .out(bram_out)
+        .out(bram_out),
+        
+        .w_en       (w_en),
+        .w_addr     (w_addr),
+        .w_rdata    (w_rdata),
+
+        .m_en       (m_en),
+        .m_we       (m_we),
+        .m_addr     (m_addr),
+        .m_wdata    (m_wdata),
+        .m_rdata    (m_rdata)
     );
 
     systolic_array u_systolic_array (
