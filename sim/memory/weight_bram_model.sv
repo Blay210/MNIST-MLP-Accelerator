@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module weight_bram_model #(
-    parameter int DEPTH  = 784 * 128,
+    parameter int DEPTH  = 784 * 128 / 4,
     parameter int ADDR_W = $clog2(DEPTH)
 )(
     input logic clk,
@@ -12,7 +12,7 @@ module weight_bram_model #(
     // ==========================================
     input  logic                    a_en,
     input  logic [ADDR_W-1:0]       a_addr,
-    output mnist_pkg::data_t        a_rdata,
+    output mnist_pkg::word_t        a_rdata,
 
     // ==========================================
     // Port B : Host / Testbench side
@@ -21,13 +21,13 @@ module weight_bram_model #(
     input  logic                    b_en,
     input  logic                    b_we,
     input  logic [ADDR_W-1:0]       b_addr,
-    input  mnist_pkg::data_t        b_wdata,
-    output mnist_pkg::data_t        b_rdata
+    input  mnist_pkg::word_t        b_wdata,
+    output mnist_pkg::word_t        b_rdata
 );
 
     import mnist_pkg::*;
 
-    data_t mem [0:DEPTH-1];
+    word_t mem [0:DEPTH-1];
 
     /*
      * Synchronous BRAM model

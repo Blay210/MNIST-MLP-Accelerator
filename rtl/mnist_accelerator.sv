@@ -8,21 +8,22 @@ module mnist_accelerator (
     input  mnist_pkg::k_idx_t   k_idx_max,
     input  mnist_pkg::n_idx_t   n_idx_max,
     input  mnist_pkg::n_total_t n_total,
+    input  mnist_pkg::k_total_t k_total,
     input  mnist_pkg::shift_t   shift_amount,
     
     output logic done,
 
     // Weight BRAM
     output logic        w_en,
-    output logic [16:0] w_addr,
-    input  mnist_pkg::data_t w_rdata,
+    output logic [14:0] w_addr,
+    input  mnist_pkg::word_t w_rdata,
 
     // Activation BRAM
     output logic        m_en,
-    output logic        m_we,
-    output logic [9:0]  m_addr,
-    output mnist_pkg::data_t m_wdata,
-    input  mnist_pkg::data_t m_rdata
+    output logic [3:0]  m_wea,
+    output logic [7:0]  m_addr,
+    output mnist_pkg::word_t m_wdata,
+    input  mnist_pkg::word_t m_rdata
 
 );
 
@@ -55,6 +56,9 @@ module mnist_accelerator (
 
     logic   relu_en_reg;
     shift_t shift_amount_reg;
+
+    logic m_we;
+    assign m_wea = {4{m_we}};
 
     assign weight_req = (current_state == GEMM_WEIGHT_REQ);
     assign data_req   = (current_state == GEMM_DATA_REQ);
@@ -223,6 +227,7 @@ module mnist_accelerator (
         .kt(k_idx_iter),
         .nt(n_idx_iter),
         .n_total(n_total_reg),
+        .k_total(k_total_reg),
         .valid(bram_valid),
         .write_done(write_done),
         .commit_done(commit_done),

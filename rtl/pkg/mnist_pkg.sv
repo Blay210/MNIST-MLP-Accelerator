@@ -8,16 +8,21 @@ package mnist_pkg;
     localparam int K_MAX = 784;
     localparam int N_MAX = 128;
 
+    localparam int WORD_NUM = 4;
+    localparam int WORD_COL_ITER = PE_DIM/WORD_NUM;
+
     typedef logic signed [DATA_LENGTH-1:0]   data_t ;
     typedef logic signed [OUTPUT_LENGTH-1:0] acc_t;
     typedef logic signed [DATA_LENGTH-1:0]   data_vec_t [0:PE_DIM-1];
     typedef logic signed [OUTPUT_LENGTH-1:0] acc_vec_t  [0:PE_DIM-1];
     typedef logic signed [DATA_LENGTH-1:0]   row_wire_t [0:PE_DIM-1][0:PE_DIM];
     typedef logic signed [OUTPUT_LENGTH-1:0] col_wire_t [0:PE_DIM][0:PE_DIM-1];
+    typedef logic [WORD_NUM*8-1:0] word_t;
     typedef logic [4:0] shift_t;
     typedef logic [6:0] k_idx_t;
     typedef logic [3:0] n_idx_t;
     typedef logic [7:0] n_total_t;
+    typedef logic [9:0] k_total_t;
     
     typedef enum logic [1:0] {
         MEM_ACTIVATION,
