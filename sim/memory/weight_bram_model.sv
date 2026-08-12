@@ -1,56 +1,61 @@
 `timescale 1ns/1ps
 
 module weight_bram_model #(
-    parameter int DEPTH  = 784 * 128 / 4,
-    parameter int ADDR_W = $clog2(DEPTH)
+    parameter int DEPTH = (784 * 128) / 4
 )(
     input logic clk,
 
     // ==========================================
     // Port A : Accelerator side
     // Read only
+    // byte-addressed
     // ==========================================
-    input  logic                    a_en,
-    input  logic [ADDR_W-1:0]       a_addr,
-    output mnist_pkg::word_t        a_rdata,
+    input  logic [31:0]       a_addr,
+    input  logic              a_en,
+    output mnist_pkg::word_t  a_rdata,
 
     // ==========================================
-    // Port B : Host / Testbench side
+    // Port B : Host/Testbench side
     // Read / Write
+    // byte-addressed
     // ==========================================
-    input  logic                    b_en,
-    input  logic                    b_we,
-    input  logic [ADDR_W-1:0]       b_addr,
-    input  mnist_pkg::word_t        b_wdata,
-    output mnist_pkg::word_t        b_rdata
+    input  logic [31:0]       b_addr,
+    input  logic              b_en,
+    input  logic [3:0]        b_we,
+    input  mnist_pkg::word_t  b_wdata,
+    output mnist_pkg::word_t  b_rdata
 );
 
     import mnist_pkg::*;
 
+    localparam int ADDR_W = $clog2(DEPTH);
+
     word_t mem [0:DEPTH-1];
 
-    /*
-     * Synchronous BRAM model
-     *
-     * Address presented at cycle N
-     * -> rdata updated at cycle N+1
-     */
+    logic [ADDR_W-1:0] a_word_addr;
+    logic [ADDR_W-1:0] b_word_addr;
+
+    // byte address -> 32-bit word index
+    assign a_word_addr = a_addr[ADDR_W+1:2];
+    assign b_word_addr = b_addr[ADDR_W+1:2];
+
     always_ff @(posedge clk) begin
 
-        // Accelerator Port A
+        // Accelerator Port A : synchronous read
         if (a_en) begin
-            a_rdata <= mem[a_addr];
+            a_rdata <= mem[a_word_addr];
         end
 
-        // Host/Testbench Port B
+        // Host Port B
         if (b_en) begin
-            if (b_we) begin
-                mem[b_addr] <= b_wdata;
+            for (int b = 0; b < 4; b++) begin
+                if (b_we[b])
+                    mem[b_word_addr][b*8 +: 8]
+                        <= b_wdata[b*8 +: 8];
             end
 
-            b_rdata <= mem[b_addr];
+            b_rdata <= mem[b_word_addr];
         end
-
     end
 
 endmodule

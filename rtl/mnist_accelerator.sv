@@ -14,14 +14,14 @@ module mnist_accelerator (
     output logic done,
 
     // Weight BRAM
-    output logic        w_en,
-    output logic [14:0] w_addr,
+    output logic             w_en,
+    output mnist_pkg::word_t w_addr,
     input  mnist_pkg::word_t w_rdata,
 
     // Activation BRAM
-    output logic        m_en,
-    output logic [3:0]  m_wea,
-    output logic [7:0]  m_addr,
+    output logic             m_en,
+    output logic [3:0]       m_wea,
+    output mnist_pkg::word_t m_addr,
     output mnist_pkg::word_t m_wdata,
     input  mnist_pkg::word_t m_rdata
 
@@ -38,6 +38,7 @@ module mnist_accelerator (
     k_idx_t   k_idx_iter, k_idx_max_reg;             // current K-tile index, 0~97 (row tile 개수)
     n_idx_t   n_idx_iter, n_idx_max_reg;             // current N-tile index, 0~15 (col tile 개수)
     n_total_t n_total_reg;
+    k_total_t k_total_reg;
 
     logic weight_req, data_req, write_req, commit_req, write_done, commit_done;
 
@@ -59,6 +60,11 @@ module mnist_accelerator (
 
     logic m_we;
     assign m_wea = {4{m_we}};
+
+    logic [14:0] w_word_addr;
+    logic [7:0]  m_word_addr;
+    assign w_addr = {15'b0, w_word_addr, 2'b00};
+    assign m_addr = {22'b0, m_word_addr, 2'b00};
 
     assign weight_req = (current_state == GEMM_WEIGHT_REQ);
     assign data_req   = (current_state == GEMM_DATA_REQ);
@@ -158,13 +164,15 @@ module mnist_accelerator (
             k_idx_max_reg <= '0;
             n_idx_max_reg <= '0;
             n_total_reg   <= '0;
+            k_total_reg   <= '0;
         end
         else if (start && current_state == GEMM_IDLE) begin
             k_idx_iter <= '0;
             n_idx_iter <= '0;
             k_idx_max_reg <= k_idx_max;
             n_idx_max_reg <= n_idx_max;
-            n_total_reg <= n_total;
+            n_total_reg   <= n_total;
+            k_total_reg   <= k_total;
         end
         else if (current_state == GEMM_NEXT_TILE) begin
             if (k_idx_iter < k_idx_max_reg) begin
@@ -234,12 +242,12 @@ module mnist_accelerator (
         .out(bram_out),
         
         .w_en       (w_en),
-        .w_addr     (w_addr),
+        .w_addr     (w_word_addr),
         .w_rdata    (w_rdata),
 
         .m_en       (m_en),
         .m_we       (m_we),
-        .m_addr     (m_addr),
+        .m_addr     (m_word_addr),
         .m_wdata    (m_wdata),
         .m_rdata    (m_rdata)
     );

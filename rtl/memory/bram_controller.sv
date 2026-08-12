@@ -85,12 +85,9 @@ module bram_controller (
     //     $readmemh("./rtl/memory/w_data.mem", w_mem);
     //     $readmemh("./rtl/memory/m_data.mem", m_mem);
     // end
-
-    logic [7:0] n_word_stride;
-
-    always_comb begin
-        n_word_stride = (n_total_reg + WORD_NUM - 1) / WORD_NUM;
-    end
+    
+    logic [7:0] n_word_stride_reg;
+    logic [14:0] w_row_base_addr;
 
     logic [7:0] commit_word_count;
 
@@ -158,10 +155,7 @@ module bram_controller (
             BRAM_WEIGHT: begin
                 if (!weight_issue_done) begin
                     w_en = 1'b1;
-
-                    w_addr = ((kt_reg * PE_DIM + iter_row) * n_word_stride)
-                           + (nt_reg * WORD_COL_ITER)
-                           + iter_col;
+                    w_addr = w_row_base_addr + iter_col;
                 end
             end
 
@@ -269,12 +263,14 @@ module bram_controller (
 
     always_ff @( posedge clk or negedge rst_n ) begin
         if (!rst_n) begin
-            kt_reg         <= '0;
-            nt_reg         <= '0;
-            n_total_reg    <= '0;
-            write_nt_reg   <= '0;
-            k_total_reg    <= '0;
-            data_write_reg <= '{default:'0};
+            kt_reg          <= '0;
+            nt_reg          <= '0;
+            n_total_reg     <= '0;
+            write_nt_reg    <= '0;
+            k_total_reg     <= '0;
+            data_write_reg  <= '{default:'0};
+            w_row_base_addr <= '0;
+            n_word_stride_reg <= '0;
         end
         else if (current_state == BRAM_IDLE &&
                 (weight_req || data_req)) begin
@@ -282,10 +278,24 @@ module bram_controller (
             nt_reg      <= nt;
             n_total_reg <= n_total;
             k_total_reg <= k_total;
+            n_word_stride_reg <= (n_total + WORD_NUM - 1) / WORD_NUM;
+            w_row_base_addr <= (
+                (kt * PE_DIM) *
+                ((n_total + WORD_NUM - 1) / WORD_NUM)
+                + nt * WORD_COL_ITER
+            );
         end
         else if (current_state == BRAM_IDLE && write_req) begin
             write_nt_reg   <= write_nt;
             data_write_reg <= write_data;
+        end
+        else if (
+            current_state == BRAM_WEIGHT &&
+            !weight_issue_done &&
+            iter_col == weight_word_count - 1 &&
+            iter_row < PE_DIM - 1
+        ) begin
+            w_row_base_addr <= w_row_base_addr + n_word_stride_reg;
         end
     end
 
@@ -426,7 +436,6 @@ module bram_controller (
 
                         if ((iter_row == PE_DIM-1) &&
                             (iter_col == weight_word_count-1)) begin
-
                             weight_issue_done <= 1'b1;
                         end
                         else if (iter_col == weight_word_count-1) begin

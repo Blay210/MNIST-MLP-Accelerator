@@ -11,46 +11,74 @@ module input_control_unit (
 
     import mnist_pkg::*;
 
-    int cnt;
     data_vec_t buffer;
+
+    logic [PE_DIM-1:0] lane_en;
     logic calc;
 
     always_comb begin
-        data_out = '{default: '0};
-        unique case (input_ctrl)
+        data_out = '{default:'0};
+
+        case (input_ctrl)
+
             SYS_LOAD: begin
                 data_out = data_in;
             end
+
             SYS_CALC: begin
-                if (cnt > 0 && cnt <= PE_DIM) begin
-                    data_out[cnt-1] = buffer[cnt-1];
+                for (int i = 0; i < PE_DIM; i++) begin
+                    if (lane_en[i])
+                        data_out[i] = buffer[i];
                 end
             end
-            default: 
-                data_out = '{default: '0};
+
+            default: begin
+                data_out = '{default:'0};
+            end
+
         endcase
     end
 
+
+    // Input capture
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            buffer   <= '{default: '0};
+            buffer <= '{default:'0};
         end
         else begin
-            if ((input_ctrl == SYS_CALC && cnt == 0) || input_ctrl == SYS_LOAD)
+            if (input_ctrl == SYS_LOAD)
+                buffer <= data_in;
+
+            else if (input_ctrl == SYS_CALC && !calc)
                 buffer <= data_in;
         end
     end
 
-    always_ff @( posedge clk or negedge rst_n ) begin
+
+    // One-hot skew control
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            cnt <= 0;
+            lane_en <= '0;
+            calc    <= 1'b0;
         end
-        else if (input_ctrl == SYS_CALC) begin
-            cnt <= cnt + 1;
+        else if (input_ctrl != SYS_CALC) begin
+            lane_en <= '0;
+            calc    <= 1'b0;
         end
         else begin
-            cnt <= 0;
+            if (!calc) begin
+                lane_en <= {{(PE_DIM-1){1'b0}}, 1'b1};
+                calc    <= 1'b1;
+            end
+
+            else if (lane_en[PE_DIM-1]) begin
+                lane_en <= '0;
+            end
+
+            else if (lane_en != '0) begin
+                lane_en <= lane_en << 1;
+            end
         end
     end
-    
+
 endmodule

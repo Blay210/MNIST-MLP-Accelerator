@@ -19,19 +19,38 @@ module tb_mnist_fpga;
     localparam int W1_SIZE = K1 * N1;
     localparam int W2_SIZE = K2 * N2;
 
-    // 기존 검증 TB에서 사용한 값으로 바꿀 것
+    localparam int WORD_BYTES = 4;
+
+    localparam int W1_WORDS_PER_ROW =
+        (N1 + WORD_BYTES - 1) / WORD_BYTES;
+
+    localparam int W2_WORDS_PER_ROW =
+        (N2 + WORD_BYTES - 1) / WORD_BYTES;
+
+    localparam int WEIGHT_DEPTH =
+        K1 * W1_WORDS_PER_ROW;
+
+    localparam int ACTIVATION_DEPTH =
+        (K1 + WORD_BYTES - 1) / WORD_BYTES;
+
+
+    // ============================================================
+    // Layer configuration
+    // ============================================================
+
     localparam logic [6:0] L1_K_IDX_MAX = 7'd97;
     localparam logic [3:0] L1_N_IDX_MAX = 4'd15;
+    localparam logic [9:0] L1_K_TOTAL   = 10'd784;
     localparam logic [7:0] L1_N_TOTAL   = 8'd128;
     localparam logic [4:0] L1_SHIFT     = 5'd11;
     localparam logic       L1_RELU      = 1'b1;
 
     localparam logic [6:0] L2_K_IDX_MAX = 7'd15;
     localparam logic [3:0] L2_N_IDX_MAX = 4'd1;
+    localparam logic [9:0] L2_K_TOTAL   = 10'd128;
     localparam logic [7:0] L2_N_TOTAL   = 8'd10;
     localparam logic [4:0] L2_SHIFT     = 5'd7;
     localparam logic       L2_RELU      = 1'b0;
-    
 
 
     // ============================================================
@@ -46,6 +65,7 @@ module tb_mnist_fpga;
 
     logic [6:0] k_idx_max;
     logic [3:0] n_idx_max;
+    logic [9:0] k_total;
     logic [7:0] n_total;
 
     logic       relu_en;
@@ -57,8 +77,8 @@ module tb_mnist_fpga;
     // ============================================================
 
     logic        w_en;
-    logic [16:0] w_addr;
-    data_t       w_rdata;
+    logic [31:0] w_addr;
+    word_t       w_rdata;
 
 
     // ============================================================
@@ -66,10 +86,10 @@ module tb_mnist_fpga;
     // ============================================================
 
     logic        w_host_en;
-    logic        w_host_we;
-    logic [16:0] w_host_addr;
-    data_t       w_host_wdata;
-    data_t       w_host_rdata;
+    logic [3:0]  w_host_we;
+    logic [31:0] w_host_addr;
+    word_t       w_host_wdata;
+    word_t       w_host_rdata;
 
 
     // ============================================================
@@ -77,10 +97,10 @@ module tb_mnist_fpga;
     // ============================================================
 
     logic        m_en;
-    logic        m_we;
-    logic [9:0]  m_addr;
-    data_t       m_wdata;
-    data_t       m_rdata;
+    logic [3:0]  m_wea;
+    logic [31:0] m_addr;
+    word_t       m_wdata;
+    word_t       m_rdata;
 
 
     // ============================================================
@@ -88,26 +108,30 @@ module tb_mnist_fpga;
     // ============================================================
 
     logic        m_host_en;
-    logic        m_host_we;
-    logic [9:0]  m_host_addr;
-    data_t       m_host_wdata;
-    data_t       m_host_rdata;
+    logic [3:0]  m_host_we;
+    logic [31:0] m_host_addr;
+    word_t       m_host_wdata;
+    word_t       m_host_rdata;
 
 
     // ============================================================
-    // Simulation-side temporary memories
-    //
-    // $readmemh는 DUT memory가 아니라
-    // TB의 임시 배열에만 사용한다.
-    // 이후 실제 BRAM Port B를 통해 write한다.
+    // Source byte arrays
     // ============================================================
 
-    data_t input_image [0:K1-1];
+    data_t input_image   [0:K1-1];
 
     data_t layer1_weight [0:W1_SIZE-1];
     data_t layer2_weight [0:W2_SIZE-1];
 
-    data_t final_result [0:N2-1];
+    data_t final_result  [0:N2-1];
+
+
+    // ============================================================
+    // Expected results
+    // ============================================================
+
+    integer expected_hidden [0:15];
+    integer expected_final  [0:9];
 
 
     // ============================================================
@@ -132,11 +156,11 @@ module tb_mnist_fpga;
 
         .start        (start),
 
+        .relu_en      (relu_en),
         .k_idx_max    (k_idx_max),
         .n_idx_max    (n_idx_max),
         .n_total      (n_total),
-
-        .relu_en      (relu_en),
+        .k_total      (k_total),
         .shift_amount (shift_amount),
 
         .done         (done),
@@ -148,7 +172,7 @@ module tb_mnist_fpga;
 
         // Activation BRAM
         .m_en         (m_en),
-        .m_we         (m_we),
+        .m_wea        (m_wea),
         .m_addr       (m_addr),
         .m_wdata      (m_wdata),
         .m_rdata      (m_rdata)
@@ -156,21 +180,18 @@ module tb_mnist_fpga;
 
 
     // ============================================================
-    // Weight BRAM model
+    // Weight BRAM
     // ============================================================
 
     weight_bram_model #(
-        .DEPTH  (K1 * N1),
-        .ADDR_W (17)
+        .DEPTH(WEIGHT_DEPTH)
     ) u_weight_bram (
         .clk     (clk),
 
-        // Accelerator Port A
         .a_en    (w_en),
         .a_addr  (w_addr),
         .a_rdata (w_rdata),
 
-        // Host Port B
         .b_en    (w_host_en),
         .b_we    (w_host_we),
         .b_addr  (w_host_addr),
@@ -180,23 +201,20 @@ module tb_mnist_fpga;
 
 
     // ============================================================
-    // Activation BRAM model
+    // Activation BRAM
     // ============================================================
 
     activation_bram_model #(
-        .DEPTH  (K1),
-        .ADDR_W (10)
+        .DEPTH(ACTIVATION_DEPTH)
     ) u_activation_bram (
         .clk     (clk),
 
-        // Accelerator Port A
         .a_en    (m_en),
-        .a_we    (m_we),
+        .a_we    (m_wea),
         .a_addr  (m_addr),
         .a_wdata (m_wdata),
         .a_rdata (m_rdata),
 
-        // Host Port B
         .b_en    (m_host_en),
         .b_we    (m_host_we),
         .b_addr  (m_host_addr),
@@ -206,232 +224,468 @@ module tb_mnist_fpga;
 
 
     // ============================================================
-    // Host-side Weight BRAM write
+    // Pack 4 int8 values -> one 32-bit word
     // ============================================================
 
-    task automatic write_weight(
-        input int    addr,
-        input data_t value
+    function automatic word_t pack4(
+        input data_t b0,
+        input data_t b1,
+        input data_t b2,
+        input data_t b3
     );
-    begin
 
-        @(negedge clk);
+        word_t temp;
 
-        w_host_en    = 1'b1;
-        w_host_we    = 1'b1;
-        w_host_addr  = addr[16:0];
-        w_host_wdata = value;
+        begin
+            temp = '0;
 
-        @(negedge clk);
+            temp[7:0]   = b0;
+            temp[15:8]  = b1;
+            temp[23:16] = b2;
+            temp[31:24] = b3;
 
-        w_host_en    = 1'b0;
-        w_host_we    = 1'b0;
+            return temp;
+        end
 
-    end
+    endfunction
+
+
+    // ============================================================
+    // Host Weight BRAM word write
+    // addr = BYTE ADDRESS
+    // ============================================================
+
+    task automatic write_weight_word(
+        input int    byte_addr,
+        input word_t value
+    );
+
+        begin
+
+            @(negedge clk);
+
+            w_host_en    = 1'b1;
+            w_host_we    = 4'b1111;
+            w_host_addr  = byte_addr;
+            w_host_wdata = value;
+
+            @(negedge clk);
+
+            w_host_en    = 1'b0;
+            w_host_we    = 4'b0000;
+            w_host_addr  = '0;
+            w_host_wdata = '0;
+
+        end
+
     endtask
 
 
     // ============================================================
-    // Host-side Activation BRAM write
+    // Host Activation BRAM word write
     // ============================================================
 
-    task automatic write_activation(
-        input int    addr,
-        input data_t value
+    task automatic write_activation_word(
+        input int    byte_addr,
+        input word_t value
     );
-    begin
 
-        @(negedge clk);
+        begin
 
-        m_host_en    = 1'b1;
-        m_host_we    = 1'b1;
-        m_host_addr  = addr[9:0];
-        m_host_wdata = value;
+            @(negedge clk);
 
-        @(negedge clk);
+            m_host_en    = 1'b1;
+            m_host_we    = 4'b1111;
+            m_host_addr  = byte_addr;
+            m_host_wdata = value;
 
-        m_host_en    = 1'b0;
-        m_host_we    = 1'b0;
+            @(negedge clk);
 
-    end
+            m_host_en    = 1'b0;
+            m_host_we    = 4'b0000;
+            m_host_addr  = '0;
+            m_host_wdata = '0;
+
+        end
+
     endtask
 
 
     // ============================================================
-    // Host-side Activation BRAM read
+    // Host Activation BRAM word read
     // ============================================================
 
-    task automatic read_activation(
-        input  int    addr,
+    task automatic read_activation_word(
+        input  int    byte_addr,
+        output word_t value
+    );
+
+        begin
+
+            @(negedge clk);
+
+            m_host_en   = 1'b1;
+            m_host_we   = 4'b0000;
+            m_host_addr = byte_addr;
+
+            @(posedge clk);
+            #1;
+
+            value = m_host_rdata;
+
+            @(negedge clk);
+
+            m_host_en   = 1'b0;
+            m_host_addr = '0;
+
+        end
+
+    endtask
+
+
+    // ============================================================
+    // Read one activation BYTE
+    // ============================================================
+
+    task automatic read_activation_byte(
+        input  int    byte_index,
         output data_t value
     );
-    begin
 
-        @(negedge clk);
+        word_t temp;
+        int word_index;
+        int byte_lane;
 
-        m_host_en   = 1'b1;
-        m_host_we   = 1'b0;
-        m_host_addr = addr[9:0];
+        begin
 
-        //
-        // synchronous BRAM read
-        //
-        @(posedge clk);
-        #1;
+            word_index = byte_index / WORD_BYTES;
+            byte_lane  = byte_index % WORD_BYTES;
 
-        value = m_host_rdata;
+            read_activation_word(
+                word_index * WORD_BYTES,
+                temp
+            );
 
-        @(negedge clk);
+            value = temp[byte_lane*8 +: 8];
 
-        m_host_en = 1'b0;
-
-    end
-    endtask
-
-
-    // ============================================================
-    // Load Layer 1 weights
-    // ============================================================
-
-    task automatic load_layer1_weights;
-    begin
-
-        $display("[TB] Loading Layer 1 weights...");
-
-        for (int i = 0; i < W1_SIZE; i++) begin
-            write_weight(i, layer1_weight[i]);
         end
 
-        $display("[TB] Layer 1 weights loaded.");
-
-    end
     endtask
 
 
     // ============================================================
-    // Load Layer 2 weights
-    // ============================================================
-
-    task automatic load_layer2_weights;
-    begin
-
-        $display("[TB] Loading Layer 2 weights...");
-
-        //
-        // Layer2부터는 weight BRAM의 앞부분을 덮어쓴다.
-        //
-        for (int i = 0; i < W2_SIZE; i++) begin
-            write_weight(i, layer2_weight[i]);
-        end
-
-        $display("[TB] Layer 2 weights loaded.");
-
-    end
-    endtask
-
-
-    // ============================================================
-    // Load MNIST image
+    // Load input image
     // ============================================================
 
     task automatic load_input_image;
-    begin
 
-        $display("[TB] Loading MNIST input image...");
+        word_t temp;
 
-        for (int i = 0; i < K1; i++) begin
-            write_activation(i, input_image[i]);
+        begin
+
+            $display("[TB] Loading input image...");
+
+            for (int i = 0; i < K1; i += WORD_BYTES) begin
+
+                temp = pack4(
+                    input_image[i+0],
+                    input_image[i+1],
+                    input_image[i+2],
+                    input_image[i+3]
+                );
+
+                write_activation_word(
+                    i,
+                    temp
+                );
+
+            end
+
+            $display("[TB] Input image loaded.");
+
         end
 
-        $display("[TB] Input image loaded.");
-
-    end
     endtask
 
 
     // ============================================================
-    // Start GEMM
+    // Load Layer 1 weight
+    //
+    // N1=128 -> exactly 32 words per row
+    // ============================================================
+
+    task automatic load_layer1_weights;
+
+        word_t temp;
+        int src_idx;
+        int word_idx;
+
+        begin
+
+            $display("[TB] Loading Layer 1 weights...");
+
+            for (int k = 0; k < K1; k++) begin
+
+                for (int w = 0; w < W1_WORDS_PER_ROW; w++) begin
+
+                    src_idx =
+                        k * N1
+                        + w * WORD_BYTES;
+
+                    temp = pack4(
+                        layer1_weight[src_idx+0],
+                        layer1_weight[src_idx+1],
+                        layer1_weight[src_idx+2],
+                        layer1_weight[src_idx+3]
+                    );
+
+                    word_idx =
+                        k * W1_WORDS_PER_ROW
+                        + w;
+
+                    write_weight_word(
+                        word_idx * WORD_BYTES,
+                        temp
+                    );
+
+                end
+            end
+
+            $display("[TB] Layer 1 weights loaded.");
+
+        end
+
+    endtask
+
+
+    // ============================================================
+    // Load Layer 2 weight
+    //
+    // N2 = 10
+    //
+    // row:
+    //
+    // word0 = W0 W1 W2 W3
+    // word1 = W4 W5 W6 W7
+    // word2 = W8 W9 00 00
+    //
+    // ============================================================
+
+    task automatic load_layer2_weights;
+
+        word_t temp;
+        int src_idx;
+        int word_idx;
+        data_t b0, b1, b2, b3;
+
+        begin
+
+            $display("[TB] Loading Layer 2 weights...");
+
+            for (int k = 0; k < K2; k++) begin
+
+                for (int w = 0; w < W2_WORDS_PER_ROW; w++) begin
+
+                    b0 = '0;
+                    b1 = '0;
+                    b2 = '0;
+                    b3 = '0;
+
+                    src_idx =
+                        k * N2
+                        + w * WORD_BYTES;
+
+                    if (w*4 + 0 < N2)
+                        b0 = layer2_weight[src_idx + 0];
+
+                    if (w*4 + 1 < N2)
+                        b1 = layer2_weight[src_idx + 1];
+
+                    if (w*4 + 2 < N2)
+                        b2 = layer2_weight[src_idx + 2];
+
+                    if (w*4 + 3 < N2)
+                        b3 = layer2_weight[src_idx + 3];
+
+                    temp = pack4(
+                        b0,
+                        b1,
+                        b2,
+                        b3
+                    );
+
+                    word_idx =
+                        k * W2_WORDS_PER_ROW
+                        + w;
+
+                    write_weight_word(
+                        word_idx * WORD_BYTES,
+                        temp
+                    );
+
+                end
+            end
+
+            $display("[TB] Layer 2 weights loaded.");
+
+        end
+
+    endtask
+
+
+    // ============================================================
+    // Run GEMM
     // ============================================================
 
     task automatic run_gemm(
         input logic [6:0] k_max,
         input logic [3:0] n_max,
+        input logic [9:0] k_size,
         input logic [7:0] n_size,
         input logic       use_relu,
         input logic [4:0] shift
     );
-    begin
 
-        @(negedge clk);
+        begin
 
-        k_idx_max    = k_max;
-        n_idx_max    = n_max;
-        n_total      = n_size;
+            @(negedge clk);
 
-        relu_en      = use_relu;
-        shift_amount = shift;
+            k_idx_max    = k_max;
+            n_idx_max    = n_max;
+            k_total      = k_size;
+            n_total      = n_size;
 
-        start = 1'b1;
+            relu_en      = use_relu;
+            shift_amount = shift;
 
-        @(negedge clk);
+            start = 1'b1;
 
-        start = 1'b0;
+            @(negedge clk);
 
+            start = 1'b0;
 
-        //
-        // Accelerator completion
-        //
-        wait(done === 1'b1);
-
-        $display(
-            "[TB] GEMM done: k_idx_max=%0d n_idx_max=%0d n_total=%0d",
-            k_max,
-            n_max,
-            n_size
-        );
-
-        //
-        // done은 GEMM_DONE state 동안 1이므로
-        // IDLE 복귀까지 기다린다.
-        //
-        @(posedge clk);
-
-    end
-    endtask
-
-
-    // ============================================================
-    // Read final 10 outputs
-    // ============================================================
-
-    task automatic read_final_result;
-    begin
-
-        $display("");
-        $display("==============================");
-        $display(" Final Layer Output");
-        $display("==============================");
-
-        for (int i = 0; i < N2; i++) begin
-
-            read_activation(i, final_result[i]);
+            wait(done === 1'b1);
 
             $display(
-                "class[%0d] = %0d",
-                i,
-                $signed(final_result[i])
+                "[TB] GEMM done: K=%0d N=%0d",
+                k_size,
+                n_size
             );
+
+            @(posedge clk);
 
         end
 
-        $display("==============================");
-
-    end
     endtask
 
 
     // ============================================================
-    // Find argmax
+    // Check Layer 1 first 16 outputs
+    // ============================================================
+
+    task automatic check_layer1;
+
+        data_t value;
+        int error_count;
+
+        begin
+
+            error_count = 0;
+
+            $display("");
+            $display("==============================");
+            $display(" Layer 1 Check");
+            $display("==============================");
+
+            for (int i = 0; i < 16; i++) begin
+
+                read_activation_byte(i, value);
+
+                $display(
+                    "hidden[%0d] = %0d (expected %0d)",
+                    i,
+                    $signed(value),
+                    expected_hidden[i]
+                );
+
+                if ($signed(value) != expected_hidden[i]) begin
+                    $error(
+                        "[L1 FAIL] index=%0d got=%0d expected=%0d",
+                        i,
+                        $signed(value),
+                        expected_hidden[i]
+                    );
+
+                    error_count++;
+                end
+
+            end
+
+            if (error_count == 0)
+                $display("[TB] Layer 1 first 16 : PASS");
+
+        end
+
+    endtask
+
+
+    // ============================================================
+    // Final result check
+    // ============================================================
+
+    task automatic check_final;
+
+        int error_count;
+
+        begin
+
+            error_count = 0;
+
+            $display("");
+            $display("==============================");
+            $display(" Final Output");
+            $display("==============================");
+
+            for (int i = 0; i < N2; i++) begin
+
+                read_activation_byte(
+                    i,
+                    final_result[i]
+                );
+
+                $display(
+                    "class[%0d] = %0d (expected %0d)",
+                    i,
+                    $signed(final_result[i]),
+                    expected_final[i]
+                );
+
+                if ($signed(final_result[i]) !=
+                    expected_final[i]) begin
+
+                    $error(
+                        "[FINAL FAIL] class=%0d got=%0d expected=%0d",
+                        i,
+                        $signed(final_result[i]),
+                        expected_final[i]
+                    );
+
+                    error_count++;
+
+                end
+
+            end
+
+            if (error_count == 0)
+                $display("[TB] Final output : PASS");
+
+        end
+
+    endtask
+
+
+    // ============================================================
+    // Prediction
     // ============================================================
 
     task automatic print_prediction;
@@ -440,38 +694,77 @@ module tb_mnist_fpga;
         integer max_value;
         integer value;
 
-    begin
+        begin
 
-        max_idx   = 0;
-        max_value = $signed(final_result[0]);
+            max_idx   = 0;
+            max_value = $signed(final_result[0]);
 
-        for (int i = 1; i < N2; i++) begin
+            for (int i = 1; i < N2; i++) begin
 
-            value = $signed(final_result[i]);
+                value = $signed(final_result[i]);
 
-            if (value > max_value) begin
-                max_value = value;
-                max_idx   = i;
+                if (value > max_value) begin
+                    max_value = value;
+                    max_idx   = i;
+                end
+
             end
+
+            $display("");
+            $display("==============================");
+            $display(" Prediction = %0d", max_idx);
+            $display(" Score      = %0d", max_value);
+            $display("==============================");
+
+            if (max_idx != 7)
+                $error("[TB] Prediction FAIL");
+
+            else
+                $display("[TB] Prediction PASS");
 
         end
 
-        $display("");
-        $display("==============================");
-        $display(" Prediction = %0d", max_idx);
-        $display(" Score      = %0d", max_value);
-        $display("==============================");
-        $display("");
-
-    end
     endtask
 
 
     // ============================================================
-    // Main test
+    // Main
     // ============================================================
 
     initial begin
+
+        // --------------------------------------------------------
+        // Expected values
+        // --------------------------------------------------------
+
+        expected_hidden[0]  = 6;
+        expected_hidden[1]  = 0;
+        expected_hidden[2]  = 0;
+        expected_hidden[3]  = 13;
+        expected_hidden[4]  = 2;
+        expected_hidden[5]  = 12;
+        expected_hidden[6]  = 0;
+        expected_hidden[7]  = 22;
+        expected_hidden[8]  = 0;
+        expected_hidden[9]  = 12;
+        expected_hidden[10] = 6;
+        expected_hidden[11] = 10;
+        expected_hidden[12] = 13;
+        expected_hidden[13] = 34;
+        expected_hidden[14] = 5;
+        expected_hidden[15] = 21;
+
+        expected_final[0] = -62;
+        expected_final[1] = -108;
+        expected_final[2] = 6;
+        expected_final[3] = 25;
+        expected_final[4] = -105;
+        expected_final[5] = -56;
+        expected_final[6] = -128;
+        expected_final[7] = 89;
+        expected_final[8] = -28;
+        expected_final[9] = -28;
+
 
         // --------------------------------------------------------
         // Initial values
@@ -483,6 +776,7 @@ module tb_mnist_fpga;
 
         k_idx_max    = '0;
         n_idx_max    = '0;
+        k_total      = '0;
         n_total      = '0;
 
         relu_en      = 1'b0;
@@ -490,22 +784,19 @@ module tb_mnist_fpga;
 
 
         w_host_en    = 1'b0;
-        w_host_we    = 1'b0;
+        w_host_we    = '0;
         w_host_addr  = '0;
         w_host_wdata = '0;
 
 
         m_host_en    = 1'b0;
-        m_host_we    = 1'b0;
+        m_host_we    = '0;
         m_host_addr  = '0;
         m_host_wdata = '0;
 
 
         // --------------------------------------------------------
-        // Load simulation source files
-        //
-        // 파일명은 현재 Python에서 생성하는 실제 파일명으로
-        // 수정하면 된다.
+        // Load byte-form source memories
         // --------------------------------------------------------
 
         $readmemh(
@@ -539,24 +830,15 @@ module tb_mnist_fpga;
 
 
         // ========================================================
-        // Initial memory load
+        // Load input + layer1 weights
         // ========================================================
 
         load_input_image();
-
         load_layer1_weights();
 
 
         // ========================================================
         // Layer 1
-        //
-        // (1 x 784) * (784 x 128)
-        //
-        // K tiles = 98
-        // last K index = 97
-        //
-        // N tiles = 16
-        // last N index = 15
         // ========================================================
 
         $display("");
@@ -567,35 +849,17 @@ module tb_mnist_fpga;
         run_gemm(
             L1_K_IDX_MAX,
             L1_N_IDX_MAX,
+            L1_K_TOTAL,
             L1_N_TOTAL,
             L1_RELU,
             L1_SHIFT
         );
 
-        $display("");
-        $display("====================================");
-        $display(" Layer 1 committed activation");
-        $display("====================================");
-
-        for (int i = 0; i < 16; i++) begin
-            data_t temp;
-
-            read_activation(i, temp);
-
-            $display(
-                "hidden[%0d] = %0d",
-                i,
-                $signed(temp)
-            );
-        end
-
+        check_layer1();
 
 
         // ========================================================
-        // Layer 1의 commit 결과는 activation BRAM [0:127]에
-        // 이미 저장되어 있다.
-        //
-        // 이제 weight만 Layer 2 것으로 교체한다.
+        // Replace weight BRAM with Layer 2 weights
         // ========================================================
 
         load_layer2_weights();
@@ -603,14 +867,6 @@ module tb_mnist_fpga;
 
         // ========================================================
         // Layer 2
-        //
-        // (1 x 128) * (128 x 10)
-        //
-        // K tiles = 16
-        // last K index = 15
-        //
-        // N tiles = ceil(10 / 8) = 2
-        // last N index = 1
         // ========================================================
 
         $display("");
@@ -618,10 +874,10 @@ module tb_mnist_fpga;
         $display(" Starting Layer 2 : 128 -> 10");
         $display("====================================");
 
-        
         run_gemm(
             L2_K_IDX_MAX,
             L2_N_IDX_MAX,
+            L2_K_TOTAL,
             L2_N_TOTAL,
             L2_RELU,
             L2_SHIFT
@@ -632,7 +888,7 @@ module tb_mnist_fpga;
         // Result
         // ========================================================
 
-        read_final_result();
+        check_final();
 
         print_prediction();
 
@@ -651,12 +907,11 @@ module tb_mnist_fpga;
 
     initial begin
 
-        #20_000_000;
+        #50_000_000;
 
         $error("[TB] TIMEOUT");
         $finish;
 
     end
-
 
 endmodule
